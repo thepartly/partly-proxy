@@ -629,7 +629,12 @@ The crate does not ship a hosting binary — wiring `ProxyClusterBuilder` into a
 - **Hop-by-hop headers.** Headers are forwarded as-is; `hyper`'s defaults handle `Content-Length` and `Transfer-Encoding` normalisation, but other hop-by-hop headers are not stripped.
 - **One-shot replay.** Replay snapshots are reusable — there is no per-snapshot consumption tracking and no "all snapshots consumed" assertion.
 - **Connection cap.** No semaphore on accepted connections; very high concurrency is bounded only by the OS and the upstream.
-- **Telemetry.** Tracing is supported via `tracing`; there is no built-in OpenTelemetry exporter.
+- **Telemetry.** Tracing is supported via `tracing`. OpenTelemetry support
+  is feature-gated (`otel_0_*` features, off by default) and provides
+  W3C TraceContext extraction, response-side injection, and opt-in
+  upstream injection — see §21. The library does **not** install a
+  tracer provider, exporter, propagator, or `tracing-subscriber`; the
+  host binary owns that.
 
 ---
 
@@ -661,3 +666,72 @@ The crate does not ship a hosting binary — wiring `ProxyClusterBuilder` into a
 2. Bind the JSON-Lines TCP adapter to a known port.
 3. Have a non-Rust test harness open a TCP connection and issue commands as JSON lines. For Playwright suites, use the first-party TypeScript client (see §12.3) instead of hand-rolling the protocol.
 4. The harness can stub, pause, query traffic, assert, and shut the proxy down without ever linking the Rust crate.
+
+---
+
+## 21. OpenTelemetry
+
+Feature-gated, off by default. One Cargo feature per `opentelemetry`
+minor version (`otel_0_27`, future `otel_0_28`, …) so the crate can
+track several minors side-by-side as the OTEL Rust stack evolves. The
+features are mutually exclusive — enabling more than one trips a
+`compile_error!` — because `opentelemetry::global::*` is non-reentrant
+across minor versions.
+
+### 21.1 Responsibility split
+
+The library does **not** install any tracer-side machinery. That is
+the host binary's job: it picks the exporter (OTLP/gRPC, OTLP/HTTP, …),
+the sampler, the resource attributes, the `TracerProvider`, the
+`TextMapPropagator`, and the `tracing-subscriber` composition. The lib
+calls `opentelemetry::global::get_text_map_propagator` and
+`tracing::Span` methods from `tracing-opentelemetry`; whatever the host
+installs is what it gets, including a no-op tracer if the host doesn't
+install one.
+
+### 21.2 Propagation contract
+
+When any `otel_0_*` feature is enabled:
+
+- **Inbound extraction (opt-out).** Each inbound request creates a
+  server span. If the request carried a `traceparent`/`tracestate`,
+  the span is parented to that context. Disable per upstream via
+  `ProxyConfig::without_otel_extraction()`; skip individual requests
+  via `ProxyConfig::with_otel_filter(|method, uri| -> bool)`.
+- **Response injection (always, when a span was created).** The proxy
+  emits a `traceparent` on the response so callers can correlate. This
+  is the W3C-native equivalent of the older
+  `axum-tracing-opentelemetry::OtelInResponseLayer`.
+- **Outbound injection (opt-in).** Disabled by default. Enable per
+  upstream via `ProxyConfig::with_otel_propagation_to_upstream()`. When
+  off, the proxy does not add any tracing headers to forwarded
+  requests; client-supplied tracing headers still flow through
+  unchanged because the proxy forwards inbound headers as-is.
+
+### 21.3 Span shape
+
+Server span (kind `SERVER`):
+
+- Name: `"{http.request.method} {http.route}"` where `http.route` is
+  the upstream's configured name (the closest analogue to a route a
+  proxy has and bounds attribute cardinality).
+- Attributes: `http.request.method`, `http.response.status_code`,
+  `http.route`, `url.path`, `url.query`, `url.scheme`,
+  `server.address`/`server.port`, `client.address`/`client.port`,
+  `user_agent.original`, `network.protocol.version`, plus
+  `partly.proxy.upstream` as a namespaced custom attribute.
+- `Status::Error` is set for 5xx responses; other outcomes leave the
+  status at `Unset`.
+
+Client span (kind `CLIENT`, child of the server span):
+
+- Name: `"{http.request.method}"` per OTEL HTTP-client semconv.
+- Attributes: `http.request.method`, `url.full`, `server.address`/
+  `server.port` from the outbound URI, `http.response.status_code`,
+  `partly.proxy.upstream`.
+
+### 21.4 Control plane
+
+The TCP JSON-Lines control plane is **not** traced — it isn't
+user-facing HTTP traffic and the cardinality wouldn't be useful. Only
+the per-upstream listeners are wired to the OTEL helpers.

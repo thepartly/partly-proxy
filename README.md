@@ -129,3 +129,55 @@ to them.
 | Wait-for `AssertSeen` / `AssertCount`         | Overshoot terminates fast                          |
 | Hosting example (`examples/host.rs`)          | Env-var-driven; ~30 lines                          |
 | TypeScript client + vitest                    | Mock + real-binary e2e suites                      |
+| OpenTelemetry (`otel_0_*` features)           | W3C extraction + opt-in upstream injection         |
+
+## OpenTelemetry
+
+Tracing/instrumentation support is feature-gated and off by default. The
+library:
+
+- Extracts the W3C `traceparent`/`tracestate` from inbound requests and
+  parents a server span on the incoming context (opt-out per upstream
+  via `without_otel_extraction`, or per request via `with_otel_filter`).
+- Injects the resulting context onto the response so callers can
+  correlate (equivalent of the older `OtelInResponseLayer`).
+- **Does not** inject context onto outbound requests unless explicitly
+  asked via `with_otel_propagation_to_upstream` on the upstream's
+  `ProxyConfig`.
+- Records HTTP attributes per the current OTEL semantic conventions
+  (`http.request.method`, `http.response.status_code`, `http.route` =
+  upstream name, `url.path`, `url.scheme`, etc.) and maps 5xx responses
+  to `Status::Error`.
+
+The library does **not** install a tracer provider, exporter,
+propagator, or `tracing-subscriber`. That is the host binary's
+responsibility — it has full control over which exporter, sampler, and
+resource attributes to use. The lib just consults
+`opentelemetry::global` for whatever the host has set up.
+
+### Version pinning
+
+The OTEL Rust crates ship breaking changes at every 0.x bump and
+ecosystem crates can be stuck on different versions for months. One
+Cargo feature per OTEL minor lets the lib track multiple minors as the
+ecosystem migrates:
+
+| Feature      | `opentelemetry` minor | Sibling crates                                                                 |
+| ------------ | --------------------- | ------------------------------------------------------------------------------ |
+| `otel_0_27`  | 0.27.x                | `opentelemetry-http` 0.27, `opentelemetry-semantic-conventions` 0.27, `tracing-opentelemetry` 0.28 |
+
+Only one `otel_0_*` feature may be enabled at a time — `lib.rs` carries
+a `compile_error!` guard that trips when more than one is selected
+(the host's installed propagator must match the lib's compiled-in OTEL
+version to round-trip context). Future versions are additive: a new
+`otel_0_28` feature, new dep renames, and a new `v0_28.rs` impl module
+all sit alongside the existing ones with no renames.
+
+```toml
+[dependencies]
+partly-proxy-lib = { version = "0.1", features = ["otel_0_27"] }
+```
+
+In the host binary, install a tracer provider, propagator, and
+`tracing-subscriber` against the matching `opentelemetry` minor; the
+lib will see them via `opentelemetry::global`.
