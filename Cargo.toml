@@ -70,6 +70,19 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tempfile = "3"
 rcgen = "0.13"
 
+# OpenTelemetry — version-suffixed renames so multiple minor versions can
+# coexist in the workspace as the OTEL Rust crates churn. See the proxy
+# lib's `otel_0_*` features. Add a new block per supported minor; do not
+# remove old ones until consumers have migrated.
+opentelemetry_0_27 = { package = "opentelemetry", version = "0.27" }
+opentelemetry-http_0_27 = { package = "opentelemetry-http", version = "0.27" }
+opentelemetry-semantic-conventions_0_27 = { package = "opentelemetry-semantic-conventions", version = "0.27", features = ["semconv_experimental"] }
+tracing-opentelemetry_0_28 = { package = "tracing-opentelemetry", version = "0.28", default-features = false }
+
+# Test-only OTEL SDK for the integration tests' in-memory span exporter.
+# Not pulled in by the lib itself.
+opentelemetry_sdk_0_27 = { package = "opentelemetry_sdk", version = "0.27", features = ["testing"] }
+
 [profile.dev]
 opt-level = 0
 
