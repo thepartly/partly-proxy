@@ -54,6 +54,11 @@ async-stream = "0.3"
 # DATABASE_URL during cargo build.
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
+# Object-storage backend: Apache Arrow's object_store crate covers
+# S3 (and S3-compatible Minio) plus GCS natively.
+object_store = { version = "0.11", default-features = false, features = ["aws", "gcp"] }
+parking_lot = "0.12"
+
 # Matching
 regex = "1"
 

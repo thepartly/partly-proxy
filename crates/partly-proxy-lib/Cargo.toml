@@ -18,10 +18,7 @@ categories = ["development-tools::testing", "network-programming"]
 default = ["storage-jsonl"]
 storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
 storage-sqlite = ["dep:partly-proxy-storage-sqlite"]
-# `storage-object` slot is reserved for slice 7. Listed as a feature name
-# with no `dep:` line until the crate lands — that way callers can already
-# write `features = ["storage-object"]` in advance without breaking.
-storage-object = []
+storage-object = ["dep:partly-proxy-storage-object"]
 testing = []
 
 [lints.rust]
@@ -51,6 +48,7 @@ partly-proxy-types = { path = "../partly-proxy-types" }
 # the matching feature is on.
 partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional = true }
 partly-proxy-storage-sqlite = { path = "../partly-proxy-storage-sqlite", optional = true }
+partly-proxy-storage-object = { path = "../partly-proxy-storage-object", optional = true }
 
 tokio = { workspace = true }
 bytes = { workspace = true }

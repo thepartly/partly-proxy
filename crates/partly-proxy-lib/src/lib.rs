@@ -57,4 +57,9 @@ pub use partly_proxy_storage_jsonl as jsonl;
 /// `storage-sqlite` feature is on.
 #[cfg(feature = "storage-sqlite")]
 pub use partly_proxy_storage_sqlite as sqlite;
+
+/// Re-export of the object-store (S3 / GCS / Minio) snapshot backend,
+/// available when the `storage-object` feature is on.
+#[cfg(feature = "storage-object")]
+pub use partly_proxy_storage_object as object;
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};
