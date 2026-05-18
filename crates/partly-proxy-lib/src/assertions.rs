@@ -7,9 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use partly_proxy_types::RecordedExchange;
 use regex::Regex;
-
-use crate::recorded::RecordedExchange;
 
 /// Predicate used by `AssertSeen`, `AssertCount`, and `QueryTraffic`.
 #[derive(Debug, Default, Clone)]
@@ -112,9 +111,11 @@ fn parse_path(uri: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
     use bytes::Bytes;
     use http::{HeaderMap, Method};
+    use partly_proxy_types::{
+        ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse,
+    };
     use std::time::Duration;
 
     fn ex(method: Method, path: &str, status: u16) -> RecordedExchange {

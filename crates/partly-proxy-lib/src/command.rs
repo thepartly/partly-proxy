@@ -11,10 +11,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
-use partly_proxy_types::{ProxyError, Result};
+use partly_proxy_types::{ProxyError, RecordedExchange, Result};
 
 use crate::assertions::TrafficFilter;
-use crate::recorded::RecordedExchange;
 use crate::recorder::Recorder;
 use crate::stub::{RequestMatcher, StubEntry, StubbedResponse};
 use crate::upstream::SharedUpstreamRegistry;
@@ -389,10 +388,10 @@ fn resolve_upstream(
 mod tests {
     use super::*;
     use crate::config::RecordingConfig;
-    use crate::recorded::{ExchangeOutcome, RecordedRequest, RecordedResponse};
     use crate::upstream::{UpstreamRegistry, UpstreamRuntime};
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode};
+    use partly_proxy_types::{ExchangeOutcome, RecordedRequest, RecordedResponse};
 
     fn fixture() -> (
         SharedUpstreamRegistry,
@@ -520,7 +519,7 @@ mod tests {
                 headers: vec![],
                 body: Bytes::new(),
             };
-            crate::recorded::RecordedExchange::new(
+            RecordedExchange::new(
                 Some("api".into()),
                 req,
                 ExchangeOutcome::Response(resp),

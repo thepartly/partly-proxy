@@ -23,7 +23,8 @@ use std::io::{BufRead, BufReader};
 #[cfg(feature = "storage-jsonl")]
 use std::path::Path;
 
-use partly_proxy_types::Result;
+use partly_proxy_types::recorded::sha256_hex;
+use partly_proxy_types::{ExchangeOutcome, RecordedExchange, RecordedRequest, Result};
 // `ProxyError` is only constructed by the JSONL loader path (and the
 // from_storage tests). Gate the import accordingly to keep
 // --no-default-features warning-free.
@@ -32,7 +33,6 @@ use partly_proxy_types::ProxyError;
 
 use crate::middleware::{self, SharedMiddleware};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
-use crate::recorded::{sha256_hex, ExchangeOutcome, RecordedExchange, RecordedRequest};
 use crate::storage::SnapshotStorage;
 
 /// Predicate type used by [`MatchStrategy::Custom`]. Defined as a type alias
@@ -258,9 +258,9 @@ fn build_header_map(pairs: &[(String, String)]) -> http::HeaderMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorded::{RecordedRequest, RecordedResponse};
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode};
+    use partly_proxy_types::{RecordedRequest, RecordedResponse};
     use std::time::Duration;
 
     fn make_exchange(method: Method, path: &str, body: &[u8], status: u16) -> RecordedExchange {

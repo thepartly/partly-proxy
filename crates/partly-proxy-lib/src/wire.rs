@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::{Method, StatusCode};
+use partly_proxy_types::RecordedExchange;
 use serde::{Deserialize, Serialize};
 
 use crate::assertions::TrafficFilter;
 use crate::command::{Command, CommandResponse};
-use crate::recorded::RecordedExchange;
 use crate::stub::{RequestMatcher, StubbedResponse};
 
 /// Filter portion of every assertion / query command, flattened.

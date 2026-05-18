@@ -15,10 +15,9 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use partly_proxy_types::Result;
+use partly_proxy_types::{RecordedExchange, Result};
 
 use crate::config::RecordingConfig;
-use crate::recorded::RecordedExchange;
 use crate::storage::SharedStorage;
 
 /// Cheap-to-clone handle on the shared recorder.
@@ -227,9 +226,9 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorded::{ExchangeOutcome, RecordedRequest, RecordedResponse};
     use bytes::Bytes;
     use http::{HeaderMap, Method};
+    use partly_proxy_types::{ExchangeOutcome, RecordedRequest, RecordedResponse};
     use std::time::Duration;
 
     fn make_exchange(path: &str, body: &[u8]) -> RecordedExchange {

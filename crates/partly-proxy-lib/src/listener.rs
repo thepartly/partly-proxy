@@ -24,14 +24,15 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use partly_proxy_types::{ProxyError, Result};
+use partly_proxy_types::{
+    ExchangeOutcome, ProxyError, RecordedExchange, RecordedRequest, RecordedResponse, Result,
+};
 
 use crate::builder::UpstreamSpec;
 use crate::context::RequestContext;
 use crate::forwarder::Forwarder;
 use crate::middleware::{self, SharedMiddleware, Terminal, TerminalFuture};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
-use crate::recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 use crate::recorder::Recorder;
 use crate::tls::build_tls_acceptor;
 use crate::upstream::UpstreamRuntime;
