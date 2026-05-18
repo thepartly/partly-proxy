@@ -1,0 +1,26 @@
+# cargo-release workspace configuration.
+# Docs: https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+#
+# Goal: one shared version across every member, one consolidated commit,
+# one tag per release. Path-dep versions in member manifests are kept in
+# sync automatically because every internal dep is consumed via
+# `partly-proxy-* .workspace = true` and resolves to the version entries
+# in the root `[workspace.dependencies]` table.
+
+# All members move together. `partly-proxy-echo` is `publish = false` so
+# it is bumped (for the version field) but skipped when publishing.
+shared-version = true
+
+# Single commit / single tag for the whole workspace rather than one per
+# member. The tag is created from the workspace root.
+consolidate-commits = true
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore: release v{{version}}"
+tag-message = "Release v{{version}}"
+
+# Publish and push are on by default; restated here for visibility. Cut
+# versions explicitly via `cargo release <level>`.
+publish = true
+push = true
+sign-commit = false
+sign-tag = false

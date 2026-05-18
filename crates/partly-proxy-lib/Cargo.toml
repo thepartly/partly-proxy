@@ -61,14 +61,14 @@ struct_field_names = "allow"
 # Shared type surface (SnapshotStorage trait, RecordedExchange, ProxyError).
 # Re-exported under the original module paths via the shim files in
 # src/{error,recorded,storage}.rs so callers see no API change.
-partly-proxy-types = { path = "../partly-proxy-types" }
+partly-proxy-types = { workspace = true }
 
 # Optional backend deps. Each crate is also usable standalone — pulling
 # them in here just makes them accessible as `partly_proxy_lib::jsonl`
 # etc., and lets `Recorder::new` open the default JSONL backend when
 # the matching feature is on.
-partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional = true }
-partly-proxy-storage-sqlite = { path = "../partly-proxy-storage-sqlite", optional = true }
+partly-proxy-storage-jsonl = { workspace = true, optional = true }
+partly-proxy-storage-sqlite = { workspace = true, optional = true }
 
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -111,7 +111,7 @@ reqwest = { workspace = true, features = ["http2"] }
 bytes = { workspace = true }
 rcgen = { workspace = true }
 tracing-subscriber = { workspace = true }
-partly-proxy-echo = { path = "../partly-proxy-echo" }
+partly-proxy-echo = { workspace = true }
 
 # Test-only OTEL SDK for the integration tests' in-memory span exporter.
 # `opentelemetry_0_27` itself reaches the test crate through the optional

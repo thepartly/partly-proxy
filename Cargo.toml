@@ -11,6 +11,19 @@ authors = ["Partly <jo@partly.com>"]
 rust-version = "1.85"
 
 [workspace.dependencies]
+# Internal crates. Each entry carries both `version` and `path` so:
+#   - in-tree builds resolve via `path`,
+#   - `cargo publish` / `cargo release` use `version` from the registry.
+# Keep these versions in lock-step with `workspace.package.version` above;
+# `release.toml` (shared-version = true) enforces that on release.
+partly-proxy-types = { version = "0.1.0", path = "crates/partly-proxy-types" }
+partly-proxy-storage-jsonl = { version = "0.1.0", path = "crates/partly-proxy-storage-jsonl" }
+partly-proxy-storage-sqlite = { version = "0.1.0", path = "crates/partly-proxy-storage-sqlite" }
+# `partly-proxy-echo` is `publish = false`; only consumed as a dev-dep
+# inside the workspace. Path-only is fine since dev-deps without a
+# version are stripped from the published manifest.
+partly-proxy-echo = { path = "crates/partly-proxy-echo" }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }

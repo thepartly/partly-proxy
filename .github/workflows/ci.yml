@@ -33,6 +33,44 @@ jobs:
       - name: Run scripts/test-unit.sh
         run: scripts/test-unit.sh
 
+  semver-checks:
+    name: cargo semver-checks
+    # PR-only: we compare the PR head against the PR base. On `push` to
+    # main there's no natural baseline (the merge commit IS main), and
+    # nothing is on crates.io yet to fall back to.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cargo-semver-checks needs the base commit available locally
+          # to build rustdoc for the baseline. Full history is the
+          # simplest way to guarantee that.
+          fetch-depth: 0
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          # Tell the action we manage the toolchain ourselves (installed
+          # via dtolnay/rust-toolchain above) so it doesn't reinstall.
+          rust-toolchain: manual
+          # Compare against the PR base, not crates.io. crates.io has no
+          # releases of these crates yet; once published, we could drop
+          # this and let the action use the registry baseline.
+          #
+          # The check fails if a member crate's public API changed in a
+          # way that requires a version bump (per semver, including the
+          # pre-1.0 rule that minor bumps are the breaking boundary)
+          # without that bump landing in Cargo.toml. `publish = false`
+          # crates (partly-proxy-echo) are skipped automatically.
+          baseline-rev: ${{ github.event.pull_request.base.sha }}
+
   test-ts-client:
     name: ts-client (vitest + tsc)
     runs-on: ubuntu-latest

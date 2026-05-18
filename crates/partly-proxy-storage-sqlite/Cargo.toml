@@ -22,7 +22,7 @@ must_use_candidate = "allow"
 # Trait + RecordedExchange + ProxyError come from the types crate;
 # depending on it here keeps the SQLite backend usable without pulling
 # in partly-proxy-lib's heavy transitive deps (hyper, rustls, …).
-partly-proxy-types = { path = "../partly-proxy-types" }
+partly-proxy-types = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
@@ -31,6 +31,6 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-partly-proxy-types = { path = "../partly-proxy-types", features = ["testing"] }
+partly-proxy-types = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
