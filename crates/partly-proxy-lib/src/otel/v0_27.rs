@@ -99,10 +99,6 @@ pub(crate) fn record_response_status(span: &Span, status: StatusCode) {
     }
 }
 
-pub(crate) fn record_error(span: &Span, message: &str) {
-    span.set_status(Status::error(message.to_owned()));
-}
-
 pub(crate) fn make_client_span(method: &Method, uri: &Uri, upstream_name: &str) -> Span {
     let display_name = method.as_str().to_owned();
     let span = tracing::info_span!(

@@ -261,14 +261,16 @@ async fn inbound_tls_serves_requests_over_https() {
     });
 
     let cfg = ProxyConfig {
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        upstream: UpstreamTarget::new(format!("http://{echo_addr}"))
-            .with_connect_timeout(Duration::from_secs(2))
-            .with_request_timeout(Duration::from_secs(5)),
         inbound_tls: Some(InboundTlsConfig {
             cert_path: certs.leaf_cert_pem.clone(),
             key_path: certs.leaf_key_pem.clone(),
         }),
+        ..ProxyConfig::http(
+            "127.0.0.1:0".parse().unwrap(),
+            UpstreamTarget::new(format!("http://{echo_addr}"))
+                .with_connect_timeout(Duration::from_secs(2))
+                .with_request_timeout(Duration::from_secs(5)),
+        )
     };
 
     let cluster = ProxyClusterBuilder::new()

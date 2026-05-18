@@ -35,6 +35,11 @@ pub(crate) struct Forwarder {
     client: HyperClient,
     target: UpstreamTarget,
     base: BaseUri,
+    /// When `true`, the current trace context is injected into the
+    /// outbound request headers before sending to the upstream. Default
+    /// `false`; set via [`Forwarder::with_otel_propagation`].
+    #[cfg(feature = "_otel_any")]
+    propagate_upstream: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -70,13 +75,30 @@ impl Forwarder {
             client,
             target,
             base,
+            #[cfg(feature = "_otel_any")]
+            propagate_upstream: false,
         })
+    }
+
+    /// Enable injection of the current OTEL context into outbound request
+    /// headers. Default is `false`.
+    #[cfg(feature = "_otel_any")]
+    pub(crate) fn with_otel_propagation(mut self, enabled: bool) -> Self {
+        self.propagate_upstream = enabled;
+        self
     }
 
     /// Forward a `ProxyRequest` to the upstream and return a `ProxyResponse`.
     /// Connect failures map to `UpstreamConnect`; timeouts and post-handshake
     /// failures map to `UpstreamRequest`.
-    pub(crate) async fn forward(&self, mut req: ProxyRequest) -> Result<ProxyResponse> {
+    ///
+    /// `upstream_name` is used as an attribute on the client-side OTEL span
+    /// (when an `otel_0_*` feature is enabled). Ignored otherwise.
+    pub(crate) async fn forward(
+        &self,
+        mut req: ProxyRequest,
+        #[cfg_attr(not(feature = "_otel_any"), allow(unused_variables))] upstream_name: &str,
+    ) -> Result<ProxyResponse> {
         let outbound_uri = self.build_outbound_uri(&req.uri)?;
 
         // Recompute the Host header. hyper-util will set one based on the
@@ -99,6 +121,15 @@ impl Forwarder {
             .uri(outbound_uri.clone())
             .version(req.version);
 
+        // Build the OTEL client span (no-op when no `otel_0_*` feature is on)
+        // and, when explicitly enabled per upstream, inject the current
+        // context into the outbound headers. The client span is created
+        // unconditionally under the feature so the proxy's own timing is
+        // visible even when the upstream isn't on the trace path.
+        #[cfg(feature = "_otel_any")]
+        let client_span =
+            crate::otel::make_client_span(&req.method, &outbound_uri, upstream_name);
+
         if let Some(headers) = builder.headers_mut() {
             *headers = req.headers.clone();
             // hyper-util sets Content-Length from the Full<Bytes> body. If
@@ -106,22 +137,37 @@ impl Forwarder {
             // is stale and would clash with hyper's recomputed value.
             headers.remove(http::header::CONTENT_LENGTH);
             headers.remove(http::header::TRANSFER_ENCODING);
+
+            #[cfg(feature = "_otel_any")]
+            if self.propagate_upstream {
+                crate::otel::inject_into_request_headers(&client_span, headers);
+            }
         }
 
         let outbound = builder
             .body(Full::new(req.body))
             .map_err(|e| ProxyError::upstream_request_with("request build failed", e))?;
 
-        let fut = self.client.request(outbound);
-        let resp = tokio::time::timeout(self.target.request_timeout, fut)
-            .await
-            .map_err(|_| {
-                ProxyError::upstream_request(format!(
-                    "request to {outbound_uri} timed out after {:?}",
-                    self.target.request_timeout
-                ))
-            })?
-            .map_err(|e| classify_legacy_error(&outbound_uri, e))?;
+        let request_fut = async {
+            let fut = self.client.request(outbound);
+            tokio::time::timeout(self.target.request_timeout, fut)
+                .await
+                .map_err(|_| {
+                    ProxyError::upstream_request(format!(
+                        "request to {outbound_uri} timed out after {:?}",
+                        self.target.request_timeout
+                    ))
+                })?
+                .map_err(|e| classify_legacy_error(&outbound_uri, e))
+        };
+
+        #[cfg(feature = "_otel_any")]
+        let resp = {
+            use tracing::Instrument;
+            request_fut.instrument(client_span.clone()).await?
+        };
+        #[cfg(not(feature = "_otel_any"))]
+        let resp = request_fut.await?;
 
         let (resp_parts, resp_body) = resp.into_parts();
         let collected = resp_body
@@ -129,6 +175,9 @@ impl Forwarder {
             .await
             .map_err(|e| ProxyError::upstream_request_with("response body read failed", e))?
             .to_bytes();
+
+        #[cfg(feature = "_otel_any")]
+        crate::otel::record_response_status(&client_span, resp_parts.status);
 
         Ok(ProxyResponse {
             status: resp_parts.status,

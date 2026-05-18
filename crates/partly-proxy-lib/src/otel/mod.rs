@@ -29,8 +29,14 @@
 mod inner;
 
 #[cfg(not(feature = "_otel_any"))]
+#[allow(dead_code)]
 mod inner {
     //! No-op stub. Compiled when no `otel_0_*` feature is on.
+    //!
+    //! Most fns aren't called from the no-OTEL request path (the call
+    //! sites are themselves inside `#[cfg(feature = "_otel_any")]`
+    //! blocks). They exist so the API surface in `mod.rs` is stable and
+    //! the future stubs/version impls stay symmetric.
 
     use std::net::SocketAddr;
 
@@ -64,8 +70,6 @@ mod inner {
 
     pub(crate) fn record_response_status(_span: &Span, _status: StatusCode) {}
 
-    pub(crate) fn record_error(_span: &Span, _message: &str) {}
-
     pub(crate) fn make_client_span(_method: &Method, _uri: &Uri, _upstream_name: &str) -> Span {
         Span::none()
     }
@@ -73,8 +77,8 @@ mod inner {
     pub(crate) fn inject_into_request_headers(_span: &Span, _headers: &mut HeaderMap) {}
 }
 
+#[allow(unused_imports)]
 pub(crate) use inner::{
     ParentContext, apply_parent, extract_parent_context, inject_into_request_headers,
-    inject_into_response_headers, make_client_span, make_server_span, record_error,
-    record_response_status,
+    inject_into_response_headers, make_client_span, make_server_span, record_response_status,
 };
