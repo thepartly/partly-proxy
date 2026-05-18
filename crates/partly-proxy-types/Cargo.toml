@@ -38,9 +38,3 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-# Integration tests + the doc-test in `storage` build an example
-# backend implementation, which needs the same async + stream surface
-# as any external implementer would pull in.
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-bytes = { workspace = true }
-http = { workspace = true }
