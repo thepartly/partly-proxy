@@ -1,0 +1,43 @@
+services:
+  echo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: partly-proxy:test
+    entrypoint: ["partly-proxy-echo"]
+    environment:
+      RUST_LOG: info
+      ECHO_BIND: 0.0.0.0:8080
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/_status/200"]
+      interval: 2s
+      timeout: 1s
+      retries: 5
+      start_period: 2s
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: partly-proxy:test
+    depends_on:
+      echo:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      PARTLY_PROXY_BIND: 0.0.0.0:8080
+      PARTLY_PROXY_UPSTREAM: http://echo:8080
+      PARTLY_PROXY_HEALTH_BIND: 0.0.0.0:9090
+      PARTLY_PROXY_TCP_CONTROL_BIND: 0.0.0.0:4500
+    ports:
+      - "8080"
+      - "9090"
+      - "4500"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9090/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 5
+      start_period: 2s
