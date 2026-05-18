@@ -23,19 +23,6 @@ pub(crate) struct RunningUpstream {
     pub task: JoinHandle<()>,
 }
 
-/// Snapshot of one upstream's runtime status — see
-/// [`ClusterHandle::upstream_statuses`].
-#[derive(Debug, Clone)]
-pub struct UpstreamStatus {
-    pub name: String,
-    pub bound_addr: SocketAddr,
-    /// `true` while the accept loop task is still running.
-    pub ready: bool,
-    /// Number of exchanges currently held in the recorder buffer for this
-    /// upstream.
-    pub exchange_count: usize,
-}
-
 /// Handle to a running cluster — see `SPECIFICATION.md` §4.
 ///
 /// Not `Clone`: `shutdown` consumes the handle. To use the cluster from
@@ -120,36 +107,6 @@ impl ClusterHandle {
     /// clone if multiple call sites need to issue commands.
     pub fn command_sender(&self) -> &CommandSender {
         &self.command_sender
-    }
-
-    /// Per-upstream snapshot for `/ready` endpoints. An upstream is `ready`
-    /// while its accept-loop task is still alive. `exchange_count` is the
-    /// number of recorded exchanges currently in the in-memory buffer
-    /// scoped to this upstream.
-    pub async fn upstream_statuses(&self) -> Vec<UpstreamStatus> {
-        let mut out = Vec::with_capacity(self.upstreams.len());
-        for (name, up) in &self.upstreams {
-            let exchange_count = self
-                .recorder
-                .count_matching(|e| e.upstream.as_deref() == Some(name.as_str()))
-                .await;
-            out.push(UpstreamStatus {
-                name: name.clone(),
-                bound_addr: up.bound_addr,
-                ready: !up.task.is_finished(),
-                exchange_count,
-            });
-        }
-        out
-    }
-
-    /// Whether the cluster as a whole is ready: at least one upstream
-    /// configured AND every upstream's accept loop still running.
-    pub fn is_ready(&self) -> bool {
-        if self.upstreams.is_empty() {
-            return false;
-        }
-        self.upstreams.values().all(|u| !u.task.is_finished())
     }
 
     /// Broadcast a shutdown signal to every listener and await its accept

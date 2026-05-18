@@ -882,15 +882,9 @@ dependencies = [
 name = "partly-proxy-runner"
 version = "0.1.0"
 dependencies = [
- "bytes",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
  "partly-proxy-echo",
  "partly-proxy-lib",
  "reqwest",
- "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",

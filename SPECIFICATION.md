@@ -615,13 +615,10 @@ A type alias `Result<T> = std::result::Result<T, ProxyError>` is provided.
 A companion binary (separate crate) wires the library to:
 
 - A hard-coded upstream and a fixed listener address.
-- A separate health server on its own port, exposing:
-  - `GET /health` and `/healthz` — liveness, always 200.
-  - `GET /ready` and `/readyz` — 200 only when the cluster has at least one upstream **and every registered upstream is ready** (listener bound, accepting connections, not in a failed state); 503 if any upstream is not ready. The body lists each upstream with its individual ready/not-ready status plus the total exchange count, so an operator can tell which upstream is holding readiness back.
 - Tracing initialised through the standard `RUST_LOG` mechanism.
 - Graceful shutdown on `Ctrl+C` via `ClusterHandle::shutdown()`.
 
-The binary is intentionally minimal — production deployments are expected to replace it with their own wiring.
+The binary is intentionally minimal — production deployments are expected to replace it with their own wiring, including any health / readiness probes their infrastructure requires.
 
 ---
 

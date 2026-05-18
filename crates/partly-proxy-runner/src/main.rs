@@ -1,4 +1,4 @@
-//! `partly-proxy-runner` — host the proxy + health endpoints.
+//! `partly-proxy-runner` — host the proxy via env-var config.
 //!
 //! Configuration via environment variables (see `RunnerOptions::from_env`).
 //! Logging via `RUST_LOG`. Graceful shutdown on Ctrl+C.
@@ -15,10 +15,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let opts = RunnerOptions::from_env()?;
-    tracing::info!(?opts.proxy_bind, ?opts.health_bind, upstream = %opts.upstream_url, "starting partly-proxy-runner");
+    tracing::info!(
+        ?opts.proxy_bind,
+        upstream = %opts.upstream_url,
+        "starting partly-proxy-runner"
+    );
 
     let runner = run(opts).await?;
-    tracing::info!(proxy = %runner.proxy_addr, health = %runner.health_addr, "ready");
+    tracing::info!(proxy = %runner.proxy_addr, "ready");
 
     tokio::signal::ctrl_c().await.ok();
     tracing::info!("Ctrl+C received; shutting down");
