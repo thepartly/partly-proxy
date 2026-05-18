@@ -13,8 +13,8 @@ use http::uri::{Authority, PathAndQuery, Scheme};
 use http::{HeaderValue, Request, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use partly_proxy_types::{ProxyError, Result};

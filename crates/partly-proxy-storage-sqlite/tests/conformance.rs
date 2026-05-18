@@ -1,7 +1,7 @@
 //! Conformance suite + memory-mode smoke for `SqliteStorage`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use partly_proxy_storage_sqlite::SqliteStorage;
 use partly_proxy_types::storage::SharedStorage;

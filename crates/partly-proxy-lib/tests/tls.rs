@@ -20,9 +20,9 @@ use hyper_util::server::conn::auto;
 use partly_proxy_lib::{
     InboundTlsConfig, ProxyClusterBuilder, ProxyConfig, UpstreamTarget, UpstreamTlsConfig,
 };
+use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;

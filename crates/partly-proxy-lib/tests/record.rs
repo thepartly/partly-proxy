@@ -76,11 +76,12 @@ async fn successful_exchange_is_recorded_in_memory() {
         ex.request.body_sha256,
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     );
-    assert!(ex
-        .request
-        .headers
-        .iter()
-        .any(|(k, v)| k == "x-trace" && v == "abc"));
+    assert!(
+        ex.request
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-trace" && v == "abc")
+    );
     let recorded_resp = match &ex.outcome {
         ExchangeOutcome::Response(r) => r,
         ExchangeOutcome::Error { message } => panic!("unexpected error outcome: {message}"),

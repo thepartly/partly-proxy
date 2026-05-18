@@ -200,7 +200,7 @@ async fn dispatch(
                 Some(name) => match upstreams.get(name) {
                     Some(up) => up.stubs.clear().await,
                     None => {
-                        return CommandResponse::error(ProxyError::UnknownUpstream(name.clone()))
+                        return CommandResponse::error(ProxyError::UnknownUpstream(name.clone()));
                     }
                 },
                 None => {

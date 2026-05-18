@@ -162,12 +162,16 @@ mod tests {
     #[test]
     fn path_regex_matches_when_compileable() {
         let e = ex(Method::GET, "/orders/123/refund", 200);
-        assert!(TrafficFilter::new()
-            .path_pattern(r"^/orders/\d+/refund$")
-            .matches(&e));
-        assert!(!TrafficFilter::new()
-            .path_pattern(r"^/orders/\d+$")
-            .matches(&e));
+        assert!(
+            TrafficFilter::new()
+                .path_pattern(r"^/orders/\d+/refund$")
+                .matches(&e)
+        );
+        assert!(
+            !TrafficFilter::new()
+                .path_pattern(r"^/orders/\d+$")
+                .matches(&e)
+        );
     }
 
     #[test]

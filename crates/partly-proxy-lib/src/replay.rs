@@ -336,13 +336,15 @@ mod tests {
             vec![make_exchange(Method::GET, "/health", b"", 200)],
             MatchStrategy::MethodPathAndBodyHash,
         );
-        assert!(src
-            .lookup(&live(Method::POST, "/health", b""), &[])
-            .is_none());
+        assert!(
+            src.lookup(&live(Method::POST, "/health", b""), &[])
+                .is_none()
+        );
         assert!(src.lookup(&live(Method::GET, "/other", b""), &[]).is_none());
-        assert!(src
-            .lookup(&live(Method::GET, "/health", b"x"), &[])
-            .is_none());
+        assert!(
+            src.lookup(&live(Method::GET, "/health", b"x"), &[])
+                .is_none()
+        );
     }
 
     #[test]

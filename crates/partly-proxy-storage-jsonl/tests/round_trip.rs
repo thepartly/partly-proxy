@@ -12,7 +12,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, Method};
-use partly_proxy_storage_jsonl::{parse_ndjson_line, JsonlStorage};
+use partly_proxy_storage_jsonl::{JsonlStorage, parse_ndjson_line};
 use partly_proxy_types::recorded::{
     ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse,
 };

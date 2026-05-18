@@ -21,15 +21,15 @@ use std::path::Path;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 use partly_proxy_types::error::{ProxyError, Result};
 use partly_proxy_types::recorded::RecordedExchange;
 use partly_proxy_types::storage::SnapshotStorage;
+use sqlx::Row;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use sqlx::Row;
 
 /// `SQLite`-backed [`SnapshotStorage`]. Cheap to wrap in `Arc` and share.
 #[derive(Debug)]
