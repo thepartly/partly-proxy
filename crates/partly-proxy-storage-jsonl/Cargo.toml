@@ -19,13 +19,13 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
-# `default-features = false` is load-bearing here: without it, depending
-# on partly-proxy-lib would re-enable its `storage-jsonl` feature, which
-# turns the optional dep on *this* crate back on — a feature cycle that
-# Cargo can detect and refuse to resolve. We only need the trait, the
-# error type, and the RecordedExchange serde plumbing from the lib; none
-# of those are gated.
-partly-proxy-lib = { path = "../partly-proxy-lib", default-features = false }
+# Depend on the types crate, NOT on partly-proxy-lib — depending on the
+# lib would create a Cargo package-graph cycle since the lib has an
+# optional dep on this crate. Cycle detection is package-level, not
+# feature-level, so even `default-features = false` wouldn't break it.
+# The types crate carries the trait + RecordedExchange + ProxyError —
+# everything this backend needs to be a valid SnapshotStorage impl.
+partly-proxy-types = { path = "../partly-proxy-types" }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures = { workspace = true }
@@ -33,6 +33,7 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+partly-proxy-types = { path = "../partly-proxy-types" }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes = { workspace = true }

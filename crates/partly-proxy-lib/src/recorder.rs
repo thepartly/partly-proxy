@@ -1,9 +1,10 @@
 //! Shared traffic recorder — see `SPECIFICATION.md` §9.2.
 //!
 //! The recorder owns an in-memory ring buffer of `RecordedExchange`s and,
-//! optionally, an append-only NDJSON file. It is cheaply cloneable
-//! (`Arc`-backed); every listener task and the future control plane share
-//! one instance per cluster.
+//! optionally, a pluggable [`SnapshotStorage`](crate::SnapshotStorage)
+//! medium for durable persistence. It is cheaply cloneable (`Arc`-backed);
+//! every listener task and the future control plane share one instance
+//! per cluster.
 //!
 //! Redaction (`redact_request_for_snapshot` / `redact_response_for_snapshot`,
 //! §6.4) happens in the lifecycle code *before* this recorder is called —
@@ -12,13 +13,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use tokio::fs::OpenOptions;
-use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{Notify, RwLock};
 
 use crate::config::RecordingConfig;
-use crate::error::{ProxyError, Result};
+use crate::error::Result;
 use crate::recorded::RecordedExchange;
+use crate::storage::SharedStorage;
 
 /// Cheap-to-clone handle on the shared recorder.
 #[derive(Clone)]
@@ -32,6 +32,7 @@ impl std::fmt::Debug for Recorder {
             .field("enabled", &self.inner.config.enabled)
             .field("max_in_memory", &self.inner.config.max_in_memory)
             .field("persist_path", &self.inner.config.persist_path)
+            .field("has_storage", &self.inner.storage.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -39,6 +40,8 @@ impl std::fmt::Debug for Recorder {
 struct RecorderInner {
     config: RecordingConfig,
     state: RwLock<RecorderState>,
+    /// Pluggable durable medium. `None` ⇒ in-memory only.
+    storage: Option<SharedStorage>,
     /// Fired (via `notify_waiters`) every time a new exchange is recorded.
     /// The wait-for assertion loop registers a waiter before each predicate
     /// check, so notifications that arrive between checks are not lost.
@@ -47,37 +50,45 @@ struct RecorderInner {
 
 struct RecorderState {
     buffer: VecDeque<RecordedExchange>,
-    file: Option<BufWriter<tokio::fs::File>>,
 }
 
 impl Recorder {
-    /// Build a recorder. If `config.persist_path` is set, the file is opened
-    /// in append mode and any error is surfaced as `ProxyError::Recording`.
+    /// Build a recorder. If `config.persist_path` is set, the appropriate
+    /// default storage backend is opened:
+    ///
+    /// - With the `storage-jsonl` feature on (default), `persist_path` is
+    ///   wired into a [`JsonlStorage`](crate::jsonl::JsonlStorage). Any
+    ///   error from opening the file surfaces as `ProxyError::Recording`.
+    /// - With `storage-jsonl` off, `persist_path` is silently honoured as
+    ///   "in-memory only" plus a warning log — callers should pass a
+    ///   [`SharedStorage`] of their choice via
+    ///   [`Recorder::with_storage`] instead.
+    ///
+    /// Callers that already hold a constructed [`SharedStorage`] (any
+    /// backend) should use [`Recorder::with_storage`] directly.
     pub async fn new(config: RecordingConfig) -> Result<Self> {
-        let file = match &config.persist_path {
-            Some(path) => {
-                let f = OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(path)
-                    .await
-                    .map_err(ProxyError::Recording)?;
-                Some(BufWriter::new(f))
-            }
-            None => None,
-        };
+        let storage = build_default_storage(&config).await?;
+        Ok(Self::with_storage(config, storage))
+    }
+
+    /// Build a recorder from an already-constructed storage backend.
+    /// Synchronous — no I/O. The caller owns the file/connection
+    /// lifecycle that produced `storage`.
+    ///
+    /// If `storage` is `None`, the recorder is in-memory only regardless
+    /// of `config.persist_path`.
+    pub fn with_storage(config: RecordingConfig, storage: Option<SharedStorage>) -> Self {
         let initial_capacity = config.max_in_memory.min(1024);
-        let state = RecorderState {
-            buffer: VecDeque::with_capacity(initial_capacity),
-            file,
-        };
-        Ok(Self {
+        Self {
             inner: Arc::new(RecorderInner {
                 config,
-                state: RwLock::new(state),
+                state: RwLock::new(RecorderState {
+                    buffer: VecDeque::with_capacity(initial_capacity),
+                }),
+                storage,
                 on_insert: Notify::new(),
             }),
-        })
+        }
     }
 
     /// Borrow the per-insert notifier. Callers that need to wait for new
@@ -98,30 +109,38 @@ impl Recorder {
         self.inner.config.max_in_memory
     }
 
+    /// View the underlying storage backend, if any.
+    pub fn storage(&self) -> Option<&SharedStorage> {
+        self.inner.storage.as_ref()
+    }
+
     /// Insert an exchange. If the buffer is at capacity, the oldest entry is
-    /// evicted first (FIFO). When the recorder has a `persist_path`, the
-    /// exchange is appended to disk *before* it lands in memory — that way a
-    /// disk error stops the exchange from being visible to predicate scans.
+    /// evicted first (FIFO). When the recorder has a storage backend, the
+    /// exchange is appended to durable storage *before* it lands in memory —
+    /// that way a storage error stops the exchange from becoming visible
+    /// to predicate scans.
     ///
     /// When recording is disabled, this is a no-op.
     pub async fn record(&self, exchange: RecordedExchange) -> Result<()> {
         if !self.inner.config.enabled {
             return Ok(());
         }
+        // Hold the write lock across the storage call so the on-disk
+        // order and the in-memory buffer order agree under concurrent
+        // record() calls. Backend `append` impls have their own locking,
+        // but holding the outer RwLock preserves today's strict-ordering
+        // guarantee.
         let mut state = self.inner.state.write().await;
 
-        if let Some(file) = state.file.as_mut() {
-            let mut line = serde_json::to_vec(&exchange)
-                .map_err(|e| ProxyError::Recording(std::io::Error::other(e)))?;
-            line.push(b'\n');
-            file.write_all(&line).await.map_err(ProxyError::Recording)?;
-            file.flush().await.map_err(ProxyError::Recording)?;
+        if let Some(storage) = &self.inner.storage {
+            storage.append(&exchange).await?;
         }
 
         if self.inner.config.max_in_memory == 0 {
-            // Cap of zero means "do not retain in memory" — disk-only mode.
-            // We still notify waiters because a disk-only recorder may be
-            // monitored by an external process tailing the NDJSON file.
+            // Cap of zero means "do not retain in memory" — storage-only
+            // mode. We still notify waiters because a storage-only
+            // recorder may be monitored by an external process tailing
+            // the medium.
             drop(state);
             self.inner.on_insert.notify_waiters();
             return Ok(());
@@ -134,6 +153,17 @@ impl Recorder {
         // grab the read lock without contending with us.
         drop(state);
         self.inner.on_insert.notify_waiters();
+        Ok(())
+    }
+
+    /// Make every previously appended exchange durable. Delegates to
+    /// `SnapshotStorage::flush`. Called explicitly by callers and by
+    /// `ClusterHandle::shutdown` to fence batching backends (object
+    /// store) before tear-down.
+    pub async fn flush(&self) -> Result<()> {
+        if let Some(storage) = &self.inner.storage {
+            storage.flush().await?;
+        }
         Ok(())
     }
 
@@ -160,8 +190,8 @@ impl Recorder {
         self.inner.state.read().await.buffer.is_empty()
     }
 
-    /// Drop every exchange currently held in memory. The on-disk NDJSON is
-    /// not touched — clearing is purely an in-memory operation.
+    /// Drop every exchange currently held in memory. The storage backend
+    /// is not touched — clearing is purely an in-memory operation.
     pub async fn clear(&self) {
         self.inner.state.write().await.buffer.clear();
     }
@@ -203,6 +233,33 @@ impl Recorder {
             .find(|e| pred(e))
             .cloned()
     }
+}
+
+/// Resolve `config.persist_path` into the default storage backend. With
+/// `storage-jsonl` on we open a `JsonlStorage`; off, we warn and return
+/// `None` (in-memory only).
+#[cfg(feature = "storage-jsonl")]
+async fn build_default_storage(config: &RecordingConfig) -> Result<Option<SharedStorage>> {
+    match &config.persist_path {
+        Some(path) => {
+            let storage = crate::jsonl::JsonlStorage::open(path.clone()).await?;
+            let shared: SharedStorage = Arc::new(storage);
+            Ok(Some(shared))
+        }
+        None => Ok(None),
+    }
+}
+
+#[cfg(not(feature = "storage-jsonl"))]
+async fn build_default_storage(config: &RecordingConfig) -> Result<Option<SharedStorage>> {
+    if config.persist_path.is_some() {
+        tracing::warn!(
+            "RecordingConfig.persist_path is set but the `storage-jsonl` feature is off; \
+             falling back to in-memory only. Pass a custom SharedStorage via \
+             Recorder::with_storage if you need persistence."
+        );
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -292,6 +349,7 @@ mod tests {
         assert_eq!(found.request.uri, "/a");
     }
 
+    #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
     async fn persist_path_writes_ndjson_lines() {
         let dir = tempfile::tempdir().unwrap();
@@ -307,6 +365,10 @@ mod tests {
             .record(make_exchange("/b", b"world"))
             .await
             .unwrap();
+        // Flush to fence any background buffer state — the BufWriter
+        // inside JsonlStorage already flushed each line, so this is a
+        // no-op but exercises the new API.
+        recorder.flush().await.unwrap();
 
         let raw = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<_> = raw.lines().collect();

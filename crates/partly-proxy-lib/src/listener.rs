@@ -432,6 +432,9 @@ fn error_kind(err: &ProxyError) -> &'static str {
         ProxyError::Tls(_) => "tls",
         ProxyError::UnknownUpstream(_) => "unknown-upstream",
         ProxyError::Shutdown(_) => "shutdown",
-        ProxyError::Other(_) => "other",
+        // ProxyError is #[non_exhaustive] and now lives in another crate
+        // (partly-proxy-types), so the match needs a fall-through arm.
+        // Bucket `Other` + any future variants as "other".
+        _ => "other",
     }
 }

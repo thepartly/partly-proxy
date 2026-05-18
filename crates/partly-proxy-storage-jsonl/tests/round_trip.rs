@@ -11,11 +11,11 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, Method};
-use partly_proxy_lib::recorded::{
+use partly_proxy_storage_jsonl::{parse_ndjson_line, JsonlStorage};
+use partly_proxy_types::recorded::{
     ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse,
 };
-use partly_proxy_lib::storage::SnapshotStorage;
-use partly_proxy_storage_jsonl::{parse_ndjson_line, JsonlStorage};
+use partly_proxy_types::storage::SnapshotStorage;
 use tokio::io::AsyncWriteExt;
 
 fn make_exchange(path: &str, body: &[u8], status: u16) -> RecordedExchange {

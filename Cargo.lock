@@ -933,6 +933,8 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "partly-proxy-echo",
+ "partly-proxy-storage-jsonl",
+ "partly-proxy-types",
  "rcgen",
  "regex",
  "reqwest",
@@ -960,10 +962,28 @@ dependencies = [
  "bytes",
  "futures",
  "http",
- "partly-proxy-lib",
+ "partly-proxy-types",
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "partly-proxy-types"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "hex",
+ "http",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]

@@ -47,4 +47,9 @@ pub use recorder::Recorder;
 pub use replay::{MatchStrategy, ReplaySource};
 pub use storage::{SharedStorage, SnapshotStorage};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
+
+/// Re-export of the JSON-Lines snapshot backend, available when the
+/// `storage-jsonl` feature is on (which it is by default).
+#[cfg(feature = "storage-jsonl")]
+pub use partly_proxy_storage_jsonl as jsonl;
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};

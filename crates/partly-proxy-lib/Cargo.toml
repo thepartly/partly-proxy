@@ -11,6 +11,21 @@ readme = "README.md"
 keywords = ["proxy", "http", "testing", "record", "replay"]
 categories = ["development-tools::testing", "network-programming"]
 
+[features]
+# `storage-jsonl` on by default preserves source-compat for callers that
+# rely on `RecordingConfig::persisted(...)` to write NDJSON — see
+# .scratch/MULTI_BACKEND_IMPLEMENTATION.md slice 2.
+default = ["storage-jsonl"]
+storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
+# `storage-sqlite` + `storage-object` slots are reserved for slices 6 / 7.
+# Listed as feature names with no `dep:` line until the crates land — that
+# way callers can already write `features = ["storage-sqlite"]` in advance
+# without breaking; the no-op feature toggles a `cfg` flag but pulls in
+# nothing. Slice 6/7 add the `dep:` line.
+storage-sqlite = []
+storage-object = []
+testing = []
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -27,6 +42,17 @@ too_many_lines = "allow"
 struct_field_names = "allow"
 
 [dependencies]
+# Shared type surface (SnapshotStorage trait, RecordedExchange, ProxyError).
+# Re-exported under the original module paths via the shim files in
+# src/{error,recorded,storage}.rs so callers see no API change.
+partly-proxy-types = { path = "../partly-proxy-types" }
+
+# Optional backend deps. Each crate is also usable standalone — pulling
+# them in here just makes them accessible as `partly_proxy_lib::jsonl`
+# etc., and lets `Recorder::new` open the default JSONL backend when
+# the matching feature is on.
+partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional = true }
+
 tokio = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
