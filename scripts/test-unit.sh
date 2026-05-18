@@ -11,8 +11,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-echo "==> cargo fmt --all -- --check"
-cargo fmt --all -- --check
+echo "==> cargo +nightly fmt --all -- --check"
+# rustfmt.toml enables nightly-only options (group_imports, imports_granularity),
+# so formatting must run under the nightly toolchain.
+cargo +nightly fmt --all -- --check
 
 echo "==> cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings

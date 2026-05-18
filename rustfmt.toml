@@ -2,3 +2,9 @@ edition = "2024"
 max_width = 100
 use_field_init_shorthand = true
 use_try_shorthand = true
+
+# Nightly-only options (run via `cargo +nightly fmt`).
+unstable_features = true
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+reorder_impl_items = true
