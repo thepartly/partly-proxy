@@ -597,7 +597,12 @@ A type alias `Result<T> = std::result::Result<T, ProxyError>` is provided.
 
 - `ProxyClusterBuilder::run().await` binds all listeners and starts background tasks before returning the `ClusterHandle`. Any setup that previously lived in `on_startup` is the caller's responsibility — run it before or after this await as appropriate.
 - The cluster runs until either `ClusterHandle::shutdown().await` is called, a `Command::Shutdown` is sent over either control plane, or the parent process exits.
-- `shutdown()` broadcasts a shutdown command and awaits the listener tasks. Any teardown that previously lived in `on_shutdown` is the caller's responsibility — run it after this await returns.
+- `ClusterHandle::shutdown_with_timeout(d)` is the graceful-shutdown entry point. `shutdown()` is a shorthand for `shutdown_with_timeout(Duration::from_secs(5))`. The contract:
+  1. **Stop accepting.** Per-upstream accept loops and both control planes exit immediately, so no new connections are admitted.
+  2. **Drain.** Each listener asks every in-flight connection to finish via `hyper`'s graceful close — `Connection: close` on HTTP/1, GOAWAY on HTTP/2. The current request completes; the connection is then closed by the peer. Pause-gated requests are unblocked at the start of the drain so they can complete within the budget.
+  3. **Hard abort.** Connections still running after `d` have their futures dropped. Exchanges aborted at this point are **not** recorded, since `record(...)` is the last step of the request lifecycle.
+  4. **Return.** `shutdown_with_timeout` returns within `d + 1s`. The 1s outer slack only fires if a listener task is wedged; in that case the task is aborted defensively and an error is reported in the joined `Result`.
+- Any teardown that previously lived in `on_shutdown` is the caller's responsibility — run it after this await returns.
 
 ---
 

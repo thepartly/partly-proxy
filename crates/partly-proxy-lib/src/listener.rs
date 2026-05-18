@@ -6,7 +6,12 @@
 //! terminal (stub scan, then replay lookup, then forward) → record
 //! (with snapshot-boundary redaction).
 
-use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    convert::Infallible,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode, Uri, Version, header::CONTENT_TYPE};
@@ -21,6 +26,7 @@ use partly_proxy_types::{
 };
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use tokio_rustls::TlsAcceptor;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     builder::UpstreamSpec,
@@ -46,7 +52,7 @@ pub(crate) async fn spawn_listener(
     spec: UpstreamSpec,
     global_middleware: Vec<SharedMiddleware>,
     recorder: Recorder,
-    shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<Option<Duration>>,
 ) -> Result<RunningListener> {
     let tls_acceptor = if let Some(cfg) = &spec.config.inbound_tls {
         Some(build_tls_acceptor(cfg)?)
@@ -88,32 +94,42 @@ async fn accept_loop(
     listener: TcpListener,
     runtime: Arc<UpstreamRuntime>,
     tls_acceptor: Option<TlsAcceptor>,
-    mut shutdown: watch::Receiver<bool>,
+    mut shutdown: watch::Receiver<Option<Duration>>,
 ) {
     tracing::debug!(name = %runtime.name, tls = tls_acceptor.is_some(), "accept loop started");
+
+    // Per-connection lifetime tracker + two-stage cancellation tokens. See
+    // `SPECIFICATION.md` §16: shutdown stops accepting, asks in-flight
+    // connections to drain via `auto::Connection::graceful_shutdown`, then
+    // hard-aborts whatever is still running after the deadline.
+    let tracker = TaskTracker::new();
+    let drain_token = CancellationToken::new();
+    let abort_token = CancellationToken::new();
+
     loop {
         tokio::select! {
             biased;
             res = shutdown.changed() => {
-                if res.is_err() || *shutdown.borrow() {
+                if res.is_err() || shutdown.borrow().is_some() {
                     tracing::debug!(name = %runtime.name, "accept loop shutting down");
-                    return;
+                    break;
                 }
             }
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer)) => {
                         let runtime = runtime.clone();
-                        let conn_shutdown = shutdown.clone();
                         let tls = tls_acceptor.clone();
-                        tokio::spawn(async move {
-                            serve_one(stream, peer, runtime, tls, conn_shutdown).await;
+                        let drain = drain_token.clone();
+                        let abort = abort_token.clone();
+                        tracker.spawn(async move {
+                            serve_one(stream, peer, runtime, tls, drain, abort).await;
                         });
                     }
                     Err(e) => {
                         if is_fatal_accept(&e) {
                             tracing::error!("fatal accept error, exiting accept loop: {e}");
-                            return;
+                            break;
                         }
                         tracing::warn!("transient accept error: {e}");
                     }
@@ -121,6 +137,34 @@ async fn accept_loop(
             }
         }
     }
+
+    // Drop the listener so the kernel stops queueing new connections.
+    drop(listener);
+
+    // Unblock any pause-gated requests so they can finish their exchange
+    // within the drain window. With pause cleared, the only way a request
+    // sits indefinitely is the upstream forward itself, which is cut by the
+    // abort step below.
+    let _ = runtime.pause.send_replace(false);
+
+    let deadline = shutdown.borrow().unwrap_or(Duration::from_secs(5));
+
+    drain_token.cancel();
+    tracker.close();
+
+    if tokio::time::timeout(deadline, tracker.wait())
+        .await
+        .is_err()
+    {
+        tracing::debug!(
+            name = %runtime.name,
+            "drain deadline {deadline:?} exceeded; hard-aborting in-flight connections"
+        );
+        abort_token.cancel();
+        tracker.wait().await;
+    }
+
+    tracing::debug!(name = %runtime.name, "accept loop exited");
 }
 
 async fn serve_one(
@@ -128,7 +172,8 @@ async fn serve_one(
     peer: std::net::SocketAddr,
     runtime: Arc<UpstreamRuntime>,
     tls_acceptor: Option<TlsAcceptor>,
-    mut conn_shutdown: watch::Receiver<bool>,
+    drain_token: CancellationToken,
+    abort_token: CancellationToken,
 ) {
     let svc = service_fn({
         let runtime = runtime.clone();
@@ -139,32 +184,55 @@ async fn serve_one(
     });
     let builder = auto::Builder::new(TokioExecutor::new());
 
+    // `serve_with_io!` runs the connection future against the two
+    // cancellation tokens: drain → ask hyper to send Connection: close
+    // (H1) / GOAWAY (H2) and finish in-flight exchanges; abort → drop the
+    // connection future entirely.
     macro_rules! serve_with_io {
         ($io:expr) => {{
             let conn = builder.serve_connection($io, svc);
+            let mut conn = std::pin::pin!(conn);
             tokio::select! {
-                res = conn => {
+                res = conn.as_mut() => {
                     if let Err(e) = res {
                         tracing::debug!(%peer, "connection ended with error: {e}");
                     }
                 }
-                _ = conn_shutdown.changed() => {
-                    tracing::debug!(%peer, "connection dropped on shutdown");
+                () = drain_token.cancelled() => {
+                    conn.as_mut().graceful_shutdown();
+                    tokio::select! {
+                        res = conn.as_mut() => {
+                            if let Err(e) = res {
+                                tracing::debug!(%peer, "graceful drain ended with error: {e}");
+                            }
+                        }
+                        () = abort_token.cancelled() => {
+                            tracing::debug!(%peer, "connection aborted on drain timeout");
+                        }
+                    }
                 }
             }
         }};
     }
 
     if let Some(acceptor) = tls_acceptor {
-        match acceptor.accept(stream).await {
-            Ok(tls_stream) => {
-                let io = TokioIo::new(tls_stream);
-                serve_with_io!(io);
+        // TLS handshake races drain_token so a half-finished handshake
+        // doesn't keep the tracker alive past the drain window.
+        let tls_stream = tokio::select! {
+            res = acceptor.accept(stream) => match res {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!(%peer, "TLS handshake failed: {e}");
+                    return;
+                }
+            },
+            () = drain_token.cancelled() => {
+                tracing::debug!(%peer, "TLS handshake aborted on shutdown");
+                return;
             }
-            Err(e) => {
-                tracing::debug!(%peer, "TLS handshake failed: {e}");
-            }
-        }
+        };
+        let io = TokioIo::new(tls_stream);
+        serve_with_io!(io);
     } else {
         let io = TokioIo::new(stream);
         serve_with_io!(io);

@@ -140,7 +140,7 @@ impl CommandSender {
 pub(crate) fn spawn_processor(
     upstreams: SharedUpstreamRegistry,
     recorder: Recorder,
-    shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<Option<std::time::Duration>>,
 ) -> (CommandSender, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<CommandEnvelope>(64);
     let task = tokio::spawn(process_loop(rx, upstreams, recorder, shutdown));
@@ -151,13 +151,13 @@ async fn process_loop(
     mut rx: mpsc::Receiver<CommandEnvelope>,
     upstreams: SharedUpstreamRegistry,
     recorder: Recorder,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut shutdown: tokio::sync::watch::Receiver<Option<std::time::Duration>>,
 ) {
     loop {
         tokio::select! {
             biased;
             res = shutdown.changed() => {
-                if res.is_err() || *shutdown.borrow() {
+                if res.is_err() || shutdown.borrow().is_some() {
                     tracing::debug!("command processor shutting down");
                     return;
                 }
@@ -402,21 +402,21 @@ mod tests {
     fn fixture() -> (
         SharedUpstreamRegistry,
         Recorder,
-        tokio::sync::watch::Sender<bool>,
+        tokio::sync::watch::Sender<Option<Duration>>,
     ) {
         let runtime = Arc::new(UpstreamRuntime::test_only("api"));
         let mut registry = UpstreamRegistry::default();
         registry.insert(runtime);
         let shared = Arc::new(registry);
         let recorder = Recorder::new(RecordingConfig::in_memory(10));
-        let (tx, _rx) = tokio::sync::watch::channel(false);
+        let (tx, _rx) = tokio::sync::watch::channel(None);
         (shared, recorder, tx)
     }
 
     #[tokio::test]
     async fn stub_command_inserts_into_store() {
         let (registry, recorder, _shutdown_tx) = fixture();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<Duration>>(None);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
         let resp = sender
@@ -433,14 +433,14 @@ mod tests {
         let up = registry.get("api").unwrap();
         assert_eq!(up.stubs.len().await, 1);
 
-        let _ = shutdown_tx.send(true);
+        let _ = shutdown_tx.send(Some(Duration::ZERO));
         let _ = task.await;
     }
 
     #[tokio::test]
     async fn stub_against_unknown_upstream_yields_error_response() {
         let (registry, recorder, _) = fixture();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<Duration>>(None);
         let (sender, task) = spawn_processor(registry, recorder, shutdown_rx);
 
         let resp = sender
@@ -457,14 +457,14 @@ mod tests {
             "got {resp:?}"
         );
 
-        let _ = shutdown_tx.send(true);
+        let _ = shutdown_tx.send(Some(Duration::ZERO));
         let _ = task.await;
     }
 
     #[tokio::test]
     async fn stub_with_none_upstream_resolves_when_single() {
         let (registry, recorder, _) = fixture();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<Duration>>(None);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
         let resp = sender
@@ -479,14 +479,14 @@ mod tests {
         assert!(matches!(resp, CommandResponse::Ok));
         assert_eq!(registry.get("api").unwrap().stubs.len().await, 1);
 
-        let _ = shutdown_tx.send(true);
+        let _ = shutdown_tx.send(Some(Duration::ZERO));
         let _ = task.await;
     }
 
     #[tokio::test]
     async fn pause_and_resume_flip_the_watch() {
         let (registry, recorder, _) = fixture();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<Duration>>(None);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
         assert!(!*registry.get("api").unwrap().pause.borrow());
@@ -505,7 +505,7 @@ mod tests {
             .unwrap();
         assert!(!*registry.get("api").unwrap().pause.borrow());
 
-        let _ = shutdown_tx.send(true);
+        let _ = shutdown_tx.send(Some(Duration::ZERO));
         let _ = task.await;
     }
 
@@ -536,14 +536,14 @@ mod tests {
         recorder.record(make()).await.unwrap();
         assert_eq!(recorder.len().await, 2);
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel::<Option<Duration>>(None);
         let (sender, task) = spawn_processor(registry, recorder.clone(), shutdown_rx);
 
         let resp = sender.send(Command::ClearRecordings).await.unwrap();
         assert!(matches!(resp, CommandResponse::Ok));
         assert_eq!(recorder.len().await, 0);
 
-        let _ = shutdown_tx.send(true);
+        let _ = shutdown_tx.send(Some(Duration::ZERO));
         let _ = task.await;
     }
 }

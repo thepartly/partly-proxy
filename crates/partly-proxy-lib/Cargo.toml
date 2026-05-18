@@ -50,6 +50,7 @@ partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional 
 partly-proxy-storage-sqlite = { path = "../partly-proxy-storage-sqlite", optional = true }
 
 tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 bytes = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -77,7 +78,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["http2"] }
 bytes = { workspace = true }
 rcgen = { workspace = true }
 tracing-subscriber = { workspace = true }

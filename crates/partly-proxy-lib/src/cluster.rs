@@ -27,7 +27,7 @@ pub(crate) struct RunningUpstream {
 /// the final shutdown call.
 pub struct ClusterHandle {
     upstreams: BTreeMap<String, RunningUpstream>,
-    shutdown_tx: watch::Sender<bool>,
+    shutdown_tx: watch::Sender<Option<Duration>>,
     recording: RecordingConfig,
     recorder: Recorder,
     command_sender: CommandSender,
@@ -54,7 +54,7 @@ impl std::fmt::Debug for ClusterHandle {
 impl ClusterHandle {
     pub(crate) fn new(
         upstreams: BTreeMap<String, RunningUpstream>,
-        shutdown_tx: watch::Sender<bool>,
+        shutdown_tx: watch::Sender<Option<Duration>>,
         recording: RecordingConfig,
         recorder: Recorder,
         command_sender: CommandSender,
@@ -106,35 +106,58 @@ impl ClusterHandle {
         &self.command_sender
     }
 
-    /// Broadcast a shutdown signal to every listener and await its accept
-    /// loop. Returns `Ok(())` once every accept loop task has joined.
+    /// Stop accepting new connections, drain in-flight HTTP exchanges, and
+    /// hard-abort anything still running after the drain budget elapses.
+    /// Returns `Ok(())` once every accept loop has joined.
     ///
-    /// In-flight connections receive the same signal and are dropped on the
-    /// next yield point. There is no graceful drain; callers that need
-    /// drain semantics should issue a `Pause` command before shutting
-    /// down and await `AssertSeen`/`AssertCount` to confirm in-flight
-    /// work has settled.
+    /// Equivalent to [`shutdown_with_timeout`](Self::shutdown_with_timeout)
+    /// with a 5-second budget.
     pub async fn shutdown(self) -> Result<()> {
         self.shutdown_with_timeout(Duration::from_secs(5)).await
     }
 
-    /// Like [`shutdown`](Self::shutdown), but with an explicit per-task join
-    /// timeout. Tasks that exceed the timeout are aborted.
+    /// Graceful shutdown with an explicit drain budget. See
+    /// `SPECIFICATION.md` §16.
+    ///
+    /// Phases:
+    /// 1. Stop accepting — the per-listener accept loop and the command /
+    ///    TCP control accept loops exit immediately on the shutdown signal.
+    /// 2. Drain — each listener asks every in-flight connection to finish
+    ///    via `auto::Connection::graceful_shutdown` (HTTP/1: `Connection:
+    ///    close`; HTTP/2: GOAWAY) and waits for the connection futures to
+    ///    resolve.
+    /// 3. Hard abort — connections that have not drained within `timeout`
+    ///    have their futures dropped.
+    ///
+    /// Returns within `timeout + 1s` (a small outer slack catches the case
+    /// where the listener task itself is wedged; on the outer timeout the
+    /// task is aborted).
+    ///
+    /// Exchanges that are still mid-request when the hard-abort fires are
+    /// **not** recorded — `record(...)` is the last step of the request
+    /// lifecycle and only runs for exchanges that completed gracefully.
     pub async fn shutdown_with_timeout(mut self, timeout: Duration) -> Result<()> {
-        let _ = self.shutdown_tx.send(true);
+        let _ = self.shutdown_tx.send(Some(timeout));
         let mut errors = Vec::new();
         // Drain listener tasks first so any in-flight requests reach the
         // recorder before we fence the storage. Order: shutdown signal →
-        // listener join → recorder flush → command/control task join.
+        // listener join (which itself drains then optionally aborts) →
+        // recorder flush → command/control task join.
+        let outer = timeout + Duration::from_secs(1);
         for (name, up) in self.upstreams {
-            match tokio::time::timeout(timeout, up.task).await {
+            // Hold an abort handle so a wedged listener task (it should
+            // bound itself by `timeout`, but bugs happen) gets terminated
+            // instead of leaking past `outer`.
+            let abort_handle = up.task.abort_handle();
+            match tokio::time::timeout(outer, up.task).await {
                 Ok(Ok(())) => {}
                 Ok(Err(join_err)) => {
                     errors.push(format!("upstream {name} task panic: {join_err}"));
                 }
                 Err(_) => {
+                    abort_handle.abort();
                     errors.push(format!(
-                        "upstream {name} accept loop did not exit within {timeout:?}"
+                        "upstream {name} accept loop did not exit within {outer:?}"
                     ));
                 }
             }
@@ -183,7 +206,7 @@ mod tests {
     use crate::{command, upstream::UpstreamRegistry};
 
     fn empty() -> ClusterHandle {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = watch::channel::<Option<Duration>>(None);
         let recorder = Recorder::new(RecordingConfig::default());
         let registry = std::sync::Arc::new(UpstreamRegistry::default());
         let (sender, task) = command::spawn_processor(registry, recorder.clone(), rx);

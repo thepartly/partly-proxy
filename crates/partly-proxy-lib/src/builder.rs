@@ -208,7 +208,7 @@ impl ProxyClusterBuilder {
             Some(storage) => Recorder::with_storage(self.recording.clone(), Some(storage)),
             None => Recorder::new(self.recording.clone()),
         };
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = watch::channel::<Option<std::time::Duration>>(None);
         let mut upstreams = BTreeMap::new();
         let mut registry = UpstreamRegistry::default();
 
@@ -236,7 +236,7 @@ impl ProxyClusterBuilder {
                 }
                 Err(e) => {
                     // Tear down whatever we managed to bring up.
-                    let _ = shutdown_tx.send(true);
+                    let _ = shutdown_tx.send(Some(std::time::Duration::ZERO));
                     for (_, up) in upstreams {
                         let _ = up.task.await;
                     }
@@ -255,7 +255,7 @@ impl ProxyClusterBuilder {
             {
                 Ok(rc) => Some(rc),
                 Err(e) => {
-                    let _ = shutdown_tx.send(true);
+                    let _ = shutdown_tx.send(Some(std::time::Duration::ZERO));
                     for (_, up) in upstreams {
                         let _ = up.task.await;
                     }

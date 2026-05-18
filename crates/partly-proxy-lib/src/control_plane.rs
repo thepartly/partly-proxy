@@ -6,7 +6,7 @@
 //! connection is independent; clients can pipeline commands by writing
 //! multiple lines.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_types::{ProxyError, Result};
 use tokio::{
@@ -32,7 +32,7 @@ pub(crate) struct RunningControlPlane {
 pub(crate) async fn spawn_tcp_control_plane(
     addr: SocketAddr,
     sender: CommandSender,
-    shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<Option<Duration>>,
 ) -> Result<RunningControlPlane> {
     let listener = TcpListener::bind(addr).await.map_err(ProxyError::Bind)?;
     let bound_addr = listener.local_addr().map_err(ProxyError::Bind)?;
@@ -43,14 +43,14 @@ pub(crate) async fn spawn_tcp_control_plane(
 async fn accept_loop(
     listener: TcpListener,
     sender: CommandSender,
-    mut shutdown: watch::Receiver<bool>,
+    mut shutdown: watch::Receiver<Option<Duration>>,
 ) {
     tracing::debug!("TCP control plane accept loop started");
     loop {
         tokio::select! {
             biased;
             res = shutdown.changed() => {
-                if res.is_err() || *shutdown.borrow() {
+                if res.is_err() || shutdown.borrow().is_some() {
                     tracing::debug!("TCP control plane shutting down");
                     return;
                 }
@@ -87,7 +87,7 @@ async fn accept_loop(
 async fn serve_connection(
     stream: TcpStream,
     sender: CommandSender,
-    mut shutdown: watch::Receiver<bool>,
+    mut shutdown: watch::Receiver<Option<Duration>>,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
@@ -95,7 +95,7 @@ async fn serve_connection(
         let next = tokio::select! {
             biased;
             res = shutdown.changed() => {
-                if res.is_err() || *shutdown.borrow() {
+                if res.is_err() || shutdown.borrow().is_some() {
                     return Ok(());
                 }
                 continue;
