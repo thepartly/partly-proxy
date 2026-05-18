@@ -196,7 +196,7 @@ async fn handle_request(
     let body_bytes = match body.collect().await {
         Ok(c) => c.to_bytes(),
         Err(e) => {
-            let err = ProxyError::UpstreamRequest(format!("inbound body read failed: {e}"));
+            let err = ProxyError::upstream_request_with("inbound body read failed", e);
             record_error_exchange(
                 &runtime,
                 &parts.method,
@@ -417,8 +417,8 @@ fn bad_gateway(err: &ProxyError) -> Response<Full<Bytes>> {
 fn error_kind(err: &ProxyError) -> &'static str {
     match err {
         ProxyError::Bind(_) => "bind",
-        ProxyError::UpstreamConnect(_) => "upstream-connect",
-        ProxyError::UpstreamRequest(_) => "upstream-request",
+        ProxyError::UpstreamConnect { .. } => "upstream-connect",
+        ProxyError::UpstreamRequest { .. } => "upstream-request",
         ProxyError::Middleware(_) => "middleware",
         ProxyError::Command(_) => "command",
         ProxyError::Recording(_) => "recording",

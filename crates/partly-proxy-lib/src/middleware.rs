@@ -299,6 +299,10 @@ mod tests {
     /// Test-only: middleware that errors out.
     struct Boom;
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("boom")]
+    struct BoomError;
+
     #[async_trait]
     impl ProxyMiddleware for Boom {
         async fn handle(
@@ -307,7 +311,7 @@ mod tests {
             _ctx: &mut RequestContext,
             _next: Next<'_>,
         ) -> Result<ProxyResponse> {
-            Err(ProxyError::Middleware("boom".into()))
+            Err(ProxyError::middleware(BoomError))
         }
     }
 

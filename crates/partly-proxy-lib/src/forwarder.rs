@@ -84,7 +84,7 @@ impl Forwarder {
         // callers override it explicitly via `host_header`.
         if let Some(override_host) = &self.target.host_header {
             let value = HeaderValue::from_str(override_host).map_err(|e| {
-                ProxyError::UpstreamRequest(format!("invalid host_header override: {e}"))
+                ProxyError::upstream_request_with("invalid host_header override", e)
             })?;
             req.headers.insert(HOST, value);
         } else {
@@ -110,13 +110,13 @@ impl Forwarder {
 
         let outbound = builder
             .body(Full::new(req.body))
-            .map_err(|e| ProxyError::UpstreamRequest(format!("request build failed: {e}")))?;
+            .map_err(|e| ProxyError::upstream_request_with("request build failed", e))?;
 
         let fut = self.client.request(outbound);
         let resp = tokio::time::timeout(self.target.request_timeout, fut)
             .await
             .map_err(|_| {
-                ProxyError::UpstreamRequest(format!(
+                ProxyError::upstream_request(format!(
                     "request to {outbound_uri} timed out after {:?}",
                     self.target.request_timeout
                 ))
@@ -127,7 +127,7 @@ impl Forwarder {
         let collected = resp_body
             .collect()
             .await
-            .map_err(|e| ProxyError::UpstreamRequest(format!("response body read failed: {e}")))?
+            .map_err(|e| ProxyError::upstream_request_with("response body read failed", e))?
             .to_bytes();
 
         Ok(ProxyResponse {
@@ -147,25 +147,25 @@ impl Forwarder {
             .authority(self.base.authority.clone())
             .path_and_query(combined_path)
             .build()
-            .map_err(|e| ProxyError::UpstreamRequest(format!("URI build failed: {e}")))
+            .map_err(|e| ProxyError::upstream_request_with("URI build failed", e))
     }
 }
 
 fn parse_base_url(s: &str) -> Result<BaseUri> {
-    let uri: Uri = s.parse().map_err(|e| ProxyError::Other(Box::new(e)))?;
+    let uri: Uri = s.parse().map_err(ProxyError::other)?;
     let scheme = uri
         .scheme()
         .cloned()
-        .ok_or_else(|| ProxyError::UpstreamConnect(format!("base_url missing scheme: {s}")))?;
+        .ok_or_else(|| ProxyError::upstream_connect(format!("base_url missing scheme: {s}")))?;
     if scheme != Scheme::HTTP && scheme != Scheme::HTTPS {
-        return Err(ProxyError::UpstreamConnect(format!(
+        return Err(ProxyError::upstream_connect(format!(
             "unsupported scheme {scheme} in base_url: {s}"
         )));
     }
     let authority = uri
         .authority()
         .cloned()
-        .ok_or_else(|| ProxyError::UpstreamConnect(format!("base_url missing authority: {s}")))?;
+        .ok_or_else(|| ProxyError::upstream_connect(format!("base_url missing authority: {s}")))?;
     let path_prefix = uri.path().trim_end_matches('/').to_owned();
     Ok(BaseUri {
         scheme,
@@ -176,9 +176,9 @@ fn parse_base_url(s: &str) -> Result<BaseUri> {
 
 fn classify_legacy_error(outbound_uri: &Uri, e: hyper_util::client::legacy::Error) -> ProxyError {
     if e.is_connect() {
-        ProxyError::UpstreamConnect(format!("connect to {outbound_uri} failed: {e}"))
+        ProxyError::upstream_connect_with(format!("connect to {outbound_uri}"), e)
     } else {
-        ProxyError::UpstreamRequest(format!("request to {outbound_uri} failed: {e}"))
+        ProxyError::upstream_request_with(format!("request to {outbound_uri}"), e)
     }
 }
 
@@ -220,7 +220,7 @@ mod tests {
     fn rejects_missing_scheme() {
         let e = parse_base_url("//upstream").unwrap_err();
         assert!(
-            matches!(e, ProxyError::Other(_) | ProxyError::UpstreamConnect(_)),
+            matches!(e, ProxyError::Other(_) | ProxyError::UpstreamConnect { .. }),
             "got {e:?}"
         );
     }
