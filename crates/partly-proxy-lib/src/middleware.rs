@@ -6,13 +6,13 @@
 //! the terminal stages (slice 5 will add stubs and slice 6 will add replay
 //! ahead of the forwarder).
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::context::RequestContext;
-use crate::error::{ProxyError, Result};
-use crate::forwarder::Forwarder;
+use crate::error::Result;
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 
 /// Object-safe middleware trait. Implementors live behind
@@ -42,15 +42,26 @@ pub trait ProxyMiddleware: Send + Sync + 'static {
 /// Shared, cheaply-clonable middleware reference.
 pub type SharedMiddleware = Arc<dyn ProxyMiddleware>;
 
-/// Cursor over the remaining middleware and the terminal stages.
+/// Boxed future returned by [`Terminal::invoke`].
+pub type TerminalFuture<'a> =
+    Pin<Box<dyn std::future::Future<Output = Result<ProxyResponse>> + Send + 'a>>;
+
+/// Terminal stage at the end of the middleware chain. Production code
+/// supplies a [`LiveTerminal`](crate::listener) that runs the stub scan,
+/// replay lookup (slice 6), and outbound forward in order. Tests can supply
+/// their own implementation to inspect chain composition in isolation.
+pub trait Terminal: Send + Sync {
+    fn invoke<'a>(&'a self, req: ProxyRequest, ctx: &'a mut RequestContext) -> TerminalFuture<'a>;
+}
+
+/// Cursor over the remaining middleware and the terminal stage.
 ///
-/// `Next` carries a borrow of the surrounding chain plus a reference to the
-/// terminal handler. Calling [`Next::run`] either advances to the next
-/// middleware or, when the chain is exhausted, drives the terminal stages
-/// directly.
+/// `Next` carries a borrow of the surrounding chain plus a reference to a
+/// trait-object terminal. Calling [`Next::run`] either advances one step or,
+/// when the chain is exhausted, drives the terminal.
 pub struct Next<'a> {
     remaining: &'a [SharedMiddleware],
-    terminal: &'a Terminal<'a>,
+    terminal: &'a dyn Terminal,
 }
 
 impl std::fmt::Debug for Next<'_> {
@@ -62,7 +73,7 @@ impl std::fmt::Debug for Next<'_> {
 }
 
 impl<'a> Next<'a> {
-    pub(crate) fn new(remaining: &'a [SharedMiddleware], terminal: &'a Terminal<'a>) -> Self {
+    pub(crate) fn new(remaining: &'a [SharedMiddleware], terminal: &'a dyn Terminal) -> Self {
         Self {
             remaining,
             terminal,
@@ -71,8 +82,7 @@ impl<'a> Next<'a> {
 
     /// Advance one step. If there is more middleware, the next layer's
     /// `handle` runs with a `Next` covering the remaining tail. When the
-    /// chain is exhausted, the terminal stages run (stub → replay → forward;
-    /// only forward exists today).
+    /// chain is exhausted, the terminal stages run (stub → replay → forward).
     pub async fn run(self, req: ProxyRequest, ctx: &mut RequestContext) -> Result<ProxyResponse> {
         if let Some((first, rest)) = self.remaining.split_first() {
             let inner = Next::new(rest, self.terminal);
@@ -80,23 +90,6 @@ impl<'a> Next<'a> {
         } else {
             self.terminal.invoke(req, ctx).await
         }
-    }
-}
-
-/// Bundle of terminal stages reached when the middleware chain is exhausted.
-/// Stubs and replay are added by later slices; for slice 4 the only terminal
-/// is the upstream forwarder.
-pub(crate) struct Terminal<'a> {
-    forwarder: &'a Forwarder,
-}
-
-impl<'a> Terminal<'a> {
-    pub(crate) fn new(forwarder: &'a Forwarder) -> Self {
-        Self { forwarder }
-    }
-
-    async fn invoke(&self, req: ProxyRequest, _ctx: &mut RequestContext) -> Result<ProxyResponse> {
-        self.forwarder.forward(req).await
     }
 }
 
@@ -116,28 +109,38 @@ pub(crate) fn redact_response(chain: &[SharedMiddleware], resp: &mut ProxyRespon
 
 /// Drive the middleware chain for one request and return the final response.
 ///
-/// Borrows `forwarder` and `chain` for the duration of the call. Mutates
-/// `ctx` (every middleware receives `&mut RequestContext` in turn).
+/// Borrows `chain` and `terminal` for the duration of the call.
 pub(crate) async fn run_chain(
     chain: &[SharedMiddleware],
-    forwarder: &Forwarder,
+    terminal: &dyn Terminal,
     req: ProxyRequest,
     ctx: &mut RequestContext,
 ) -> Result<ProxyResponse> {
-    let terminal = Terminal::new(forwarder);
-    let next = Next::new(chain, &terminal);
-    match next.run(req, ctx).await {
-        Ok(r) => Ok(r),
-        Err(ProxyError::Middleware(m)) => Err(ProxyError::Middleware(m)),
-        Err(other) => Err(other),
-    }
+    let next = Next::new(chain, terminal);
+    next.run(req, ctx).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ProxyError;
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode, Uri};
+
+    /// Test terminal: returns a fixed 404 with the request body echoed.
+    struct FakeTerminal;
+
+    impl Terminal for FakeTerminal {
+        fn invoke<'a>(
+            &'a self,
+            req: ProxyRequest,
+            _ctx: &'a mut RequestContext,
+        ) -> TerminalFuture<'a> {
+            Box::pin(
+                async move { Ok(ProxyResponse::new(StatusCode::NOT_FOUND).with_body(req.body)) },
+            )
+        }
+    }
 
     /// Test-only: middleware that records its own observation order via a
     /// shared `Arc<Mutex<Vec<&'static str>>>`.
@@ -209,9 +212,9 @@ mod tests {
             }),
         ];
 
-        let forwarder = unreachable_forwarder();
+        let terminal = FakeTerminal;
         let mut ctx = RequestContext::new();
-        let resp = run_chain(&chain, &forwarder, proxy_req(), &mut ctx)
+        let resp = run_chain(&chain, &terminal, proxy_req(), &mut ctx)
             .await
             .unwrap();
         assert_eq!(resp.status, StatusCode::OK);
@@ -235,9 +238,9 @@ mod tests {
             }),
         ];
 
-        let forwarder = unreachable_forwarder();
+        let terminal = FakeTerminal;
         let mut ctx = RequestContext::new();
-        let resp = run_chain(&chain, &forwarder, proxy_req(), &mut ctx)
+        let resp = run_chain(&chain, &terminal, proxy_req(), &mut ctx)
             .await
             .unwrap();
         assert_eq!(resp.status, StatusCode::IM_A_TEAPOT);
@@ -284,9 +287,9 @@ mod tests {
     #[tokio::test]
     async fn wrapper_rewrites_request_and_response_bodies() {
         let chain: Vec<SharedMiddleware> = vec![Arc::new(Wrapper), Arc::new(EchoTerminal)];
-        let forwarder = unreachable_forwarder();
+        let terminal = FakeTerminal;
         let mut ctx = RequestContext::new();
-        let resp = run_chain(&chain, &forwarder, proxy_req(), &mut ctx)
+        let resp = run_chain(&chain, &terminal, proxy_req(), &mut ctx)
             .await
             .unwrap();
         assert_eq!(resp.body, Bytes::from_static(b"prefix:<wrapped>"));
@@ -332,9 +335,9 @@ mod tests {
     #[tokio::test]
     async fn outer_middleware_can_recover_from_inner_error() {
         let chain: Vec<SharedMiddleware> = vec![Arc::new(Recover), Arc::new(Boom)];
-        let forwarder = unreachable_forwarder();
+        let terminal = FakeTerminal;
         let mut ctx = RequestContext::new();
-        let resp = run_chain(&chain, &forwarder, proxy_req(), &mut ctx)
+        let resp = run_chain(&chain, &terminal, proxy_req(), &mut ctx)
             .await
             .unwrap();
         assert_eq!(resp.status, StatusCode::OK);
@@ -344,9 +347,9 @@ mod tests {
     #[tokio::test]
     async fn error_propagates_when_no_middleware_catches() {
         let chain: Vec<SharedMiddleware> = vec![Arc::new(Boom)];
-        let forwarder = unreachable_forwarder();
+        let terminal = FakeTerminal;
         let mut ctx = RequestContext::new();
-        let err = run_chain(&chain, &forwarder, proxy_req(), &mut ctx)
+        let err = run_chain(&chain, &terminal, proxy_req(), &mut ctx)
             .await
             .unwrap_err();
         assert!(matches!(err, ProxyError::Middleware(_)));
@@ -398,13 +401,5 @@ mod tests {
             resp.headers.get("x-keep").and_then(|v| v.to_str().ok()),
             Some("ok")
         );
-    }
-
-    /// Build a Forwarder pointing at a syntactically valid URL — the
-    /// chain-composition tests never reach the terminal, so a dead address
-    /// is fine.
-    fn unreachable_forwarder() -> Forwarder {
-        Forwarder::new(crate::config::UpstreamTarget::new("http://127.0.0.1:1"))
-            .expect("forwarder builds")
     }
 }

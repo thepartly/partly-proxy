@@ -13,11 +13,13 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 use crate::cluster::{ClusterHandle, RunningUpstream};
+use crate::command;
 use crate::config::{ProxyConfig, RecordingConfig};
 use crate::error::{ProxyError, Result};
 use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
 use crate::recorder::Recorder;
+use crate::upstream::UpstreamRegistry;
 
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).
 #[derive(Default)]
@@ -152,6 +154,7 @@ impl ProxyClusterBuilder {
         let recorder = Recorder::new(self.recording.clone()).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut upstreams = BTreeMap::new();
+        let mut registry = UpstreamRegistry::default();
 
         let global_middleware = self.global_middleware;
 
@@ -166,6 +169,7 @@ impl ProxyClusterBuilder {
             .await
             {
                 Ok(running) => {
+                    registry.insert(running.runtime);
                     upstreams.insert(
                         name,
                         RunningUpstream {
@@ -185,11 +189,17 @@ impl ProxyClusterBuilder {
             }
         }
 
+        let registry = Arc::new(registry);
+        let (command_sender, command_task) =
+            command::spawn_processor(registry, recorder.clone(), shutdown_rx);
+
         Ok(ClusterHandle::new(
             upstreams,
             shutdown_tx,
             self.recording,
             recorder,
+            command_sender,
+            command_task,
         ))
     }
 }

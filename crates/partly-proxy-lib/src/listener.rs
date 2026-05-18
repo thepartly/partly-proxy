@@ -1,13 +1,14 @@
 //! Inbound TCP accept loop and per-request service handler.
 //!
 //! Lifecycle stages from `SPECIFICATION.md` §5 wired up so far:
-//!   - 4: body collection (always)
+//!   - 3: pause gate (slice 5)
+//!   - 4: body collection
 //!   - 5: middleware chain (slice 4)
-//!   - 8: forward to upstream (terminal — stubs and replay land in 5/6)
-//!   - 9: record (slice 3, with redaction applied via slice 4)
+//!   - 6: stub scan terminal (slice 5)
+//!   - 8: forward to upstream
+//!   - 9: record (with snapshot-boundary redaction)
 //!
-//! Stages 1 (TLS) and 6/7 (stub/replay terminals) are no-ops until later
-//! slices.
+//! Stages 1 (TLS) and 7 (replay terminal) land in later slices.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -31,25 +32,17 @@ use crate::builder::UpstreamSpec;
 use crate::context::RequestContext;
 use crate::error::{ProxyError, Result};
 use crate::forwarder::Forwarder;
-use crate::middleware::{self, SharedMiddleware};
+use crate::middleware::{self, SharedMiddleware, Terminal, TerminalFuture};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 use crate::recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 use crate::recorder::Recorder;
-
-/// Per-upstream runtime state shared with every accepted connection.
-pub(crate) struct UpstreamRuntime {
-    pub name: String,
-    pub forwarder: Forwarder,
-    pub recorder: Recorder,
-    /// Effective middleware chain for this upstream — `global ++ per_upstream`,
-    /// pre-composed at `run()` time.
-    pub middleware: Vec<SharedMiddleware>,
-}
+use crate::upstream::UpstreamRuntime;
 
 /// One running listener — the bound address plus the task handle of the
 /// accept loop.
 pub(crate) struct RunningListener {
     pub bound_addr: SocketAddr,
+    pub runtime: Arc<UpstreamRuntime>,
     pub task: JoinHandle<()>,
 }
 
@@ -69,15 +62,16 @@ pub(crate) async fn spawn_listener(
     let mut middleware = global_middleware;
     middleware.extend(spec.middleware);
 
-    let runtime = Arc::new(UpstreamRuntime {
-        name: spec.name,
-        forwarder,
-        recorder,
-        middleware,
-    });
+    let runtime = Arc::new(UpstreamRuntime::new(
+        spec.name, forwarder, recorder, middleware,
+    ));
 
-    let task = tokio::spawn(accept_loop(listener, runtime, shutdown));
-    Ok(RunningListener { bound_addr, task })
+    let task = tokio::spawn(accept_loop(listener, runtime.clone(), shutdown));
+    Ok(RunningListener {
+        bound_addr,
+        runtime,
+        task,
+    })
 }
 
 async fn accept_loop(
@@ -148,9 +142,13 @@ async fn handle_request(
 ) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
     use http_body_util::BodyExt;
 
+    // Lifecycle stage 3: pause gate.
+    pause_gate(&runtime).await;
+
     let started = Instant::now();
     let (parts, body) = req.into_parts();
 
+    // Lifecycle stage 4: body collection.
     let body_bytes = match body.collect().await {
         Ok(c) => c.to_bytes(),
         Err(e) => {
@@ -178,14 +176,14 @@ async fn handle_request(
     };
 
     let mut ctx = RequestContext::new();
+
+    // Lifecycle stages 5–8: middleware chain wrapping the stub→forward terminal.
+    let terminal = LiveTerminal {
+        runtime: runtime.as_ref(),
+    };
     let chain_input = original_request.clone();
-    let outcome = middleware::run_chain(
-        &runtime.middleware,
-        &runtime.forwarder,
-        chain_input,
-        &mut ctx,
-    )
-    .await;
+    let outcome =
+        middleware::run_chain(&runtime.middleware, &terminal, chain_input, &mut ctx).await;
 
     match outcome {
         Ok(resp) => {
@@ -205,6 +203,41 @@ async fn handle_request(
             .await;
             Ok(bad_gateway(&err))
         }
+    }
+}
+
+/// Lifecycle stage 3: block while `runtime.pause` is true.
+async fn pause_gate(runtime: &UpstreamRuntime) {
+    let mut rx = runtime.pause_receiver();
+    while *rx.borrow() {
+        // `changed()` returns Err when the sender is dropped — in that
+        // case we treat it as "no longer paused" and proceed.
+        if rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Concrete terminal that drives the stub scan and outbound forward. Replay
+/// (slice 6) will plug in between the stub scan and the forward.
+struct LiveTerminal<'a> {
+    runtime: &'a UpstreamRuntime,
+}
+
+impl Terminal for LiveTerminal<'_> {
+    fn invoke<'b>(&'b self, req: ProxyRequest, _ctx: &'b mut RequestContext) -> TerminalFuture<'b> {
+        Box::pin(async move {
+            // Lifecycle stage 6: stub scan. The first matching stub wins.
+            if let Some((response, delay)) = self.runtime.stubs.take_match(&req).await {
+                if let Some(d) = delay {
+                    tokio::time::sleep(d).await;
+                }
+                return Ok(response.into_proxy());
+            }
+            // Lifecycle stage 7: replay lookup (slice 6).
+            // Lifecycle stage 8: forward.
+            self.runtime.forwarder.forward(req).await
+        })
     }
 }
 
