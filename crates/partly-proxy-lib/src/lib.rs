@@ -26,6 +26,7 @@ pub mod recorded;
 pub mod recorder;
 pub mod replay;
 pub mod stub;
+mod tls;
 mod upstream;
 pub mod wire;
 

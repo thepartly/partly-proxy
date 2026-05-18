@@ -34,6 +34,11 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+hyper-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
@@ -51,4 +56,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
 reqwest = { workspace = true }
 bytes = { workspace = true }
+rcgen = { workspace = true }
 partly-proxy-echo = { path = "../partly-proxy-echo" }

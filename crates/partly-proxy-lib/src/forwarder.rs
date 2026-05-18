@@ -1,8 +1,9 @@
 //! Outbound forwarder — owns the hyper-util client and the URI-rewrite rules
-//! for one upstream. See `SPECIFICATION.md` §10.
+//! for one upstream. See `SPECIFICATION.md` §10 + §11.1.
 //!
-//! Slice 2 only supports plain HTTP upstreams. HTTPS support lands in slice 9
-//! along with the TLS configuration plumbing.
+//! Plain HTTP and HTTPS upstreams use the same `HttpsConnector<HttpConnector>`,
+//! configured per-upstream from [`UpstreamTlsConfig`]. The scheme of
+//! `base_url` decides which is actually used; the connector serves both.
 
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use http::header::HOST;
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::{HeaderValue, Request, Uri};
 use http_body_util::{BodyExt, Full};
+use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -18,8 +20,10 @@ use hyper_util::rt::TokioExecutor;
 use crate::config::UpstreamTarget;
 use crate::error::{ProxyError, Result};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
+use crate::tls::build_client_config;
 
-type HyperClient = Client<HttpConnector, Full<Bytes>>;
+type Connector = HttpsConnector<HttpConnector>;
+type HyperClient = Client<Connector, Full<Bytes>>;
 
 /// Per-upstream outbound client and pre-parsed base URI.
 pub(crate) struct Forwarder {
@@ -41,9 +45,17 @@ impl Forwarder {
     pub(crate) fn new(target: UpstreamTarget) -> Result<Self> {
         let base = parse_base_url(&target.base_url)?;
 
-        let mut connector = HttpConnector::new();
-        connector.enforce_http(false);
-        connector.set_connect_timeout(Some(target.connect_timeout));
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        http.set_connect_timeout(Some(target.connect_timeout));
+
+        let tls_config = build_client_config(target.tls.as_ref())?;
+        let connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .wrap_connector(http);
 
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(Duration::from_secs(30))
@@ -145,12 +157,6 @@ fn parse_base_url(s: &str) -> Result<BaseUri> {
             "unsupported scheme {scheme} in base_url: {s}"
         )));
     }
-    if scheme == Scheme::HTTPS {
-        // Slice 9 fills this in.
-        return Err(ProxyError::Tls(format!(
-            "HTTPS upstreams are not yet supported (slice 9): {s}"
-        )));
-    }
     let authority = uri
         .authority()
         .cloned()
@@ -200,9 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn https_base_url_is_not_yet_supported() {
-        let e = parse_base_url("https://upstream").unwrap_err();
-        assert!(matches!(e, ProxyError::Tls(_)), "got {e:?}");
+    fn https_base_url_is_accepted() {
+        let b = parse_base_url("https://upstream").unwrap();
+        assert_eq!(b.scheme, Scheme::HTTPS);
     }
 
     #[test]

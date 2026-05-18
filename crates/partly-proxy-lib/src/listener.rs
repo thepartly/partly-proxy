@@ -36,7 +36,9 @@ use crate::middleware::{self, SharedMiddleware, Terminal, TerminalFuture};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 use crate::recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 use crate::recorder::Recorder;
+use crate::tls::build_tls_acceptor;
 use crate::upstream::UpstreamRuntime;
+use tokio_rustls::TlsAcceptor;
 
 /// One running listener — the bound address plus the task handle of the
 /// accept loop.
@@ -53,6 +55,12 @@ pub(crate) async fn spawn_listener(
     recorder: Recorder,
     shutdown: watch::Receiver<bool>,
 ) -> Result<RunningListener> {
+    let tls_acceptor = if let Some(cfg) = &spec.config.inbound_tls {
+        Some(build_tls_acceptor(cfg)?)
+    } else {
+        None
+    };
+
     let listener = TcpListener::bind(spec.config.bind_addr)
         .await
         .map_err(ProxyError::Bind)?;
@@ -70,7 +78,12 @@ pub(crate) async fn spawn_listener(
         spec.replay,
     ));
 
-    let task = tokio::spawn(accept_loop(listener, runtime.clone(), shutdown));
+    let task = tokio::spawn(accept_loop(
+        listener,
+        runtime.clone(),
+        tls_acceptor,
+        shutdown,
+    ));
     Ok(RunningListener {
         bound_addr,
         runtime,
@@ -81,9 +94,10 @@ pub(crate) async fn spawn_listener(
 async fn accept_loop(
     listener: TcpListener,
     runtime: Arc<UpstreamRuntime>,
+    tls_acceptor: Option<TlsAcceptor>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    tracing::debug!(name = %runtime.name, "accept loop started");
+    tracing::debug!(name = %runtime.name, tls = tls_acceptor.is_some(), "accept loop started");
     loop {
         tokio::select! {
             biased;
@@ -97,25 +111,10 @@ async fn accept_loop(
                 match accepted {
                     Ok((stream, peer)) => {
                         let runtime = runtime.clone();
-                        let mut conn_shutdown = shutdown.clone();
+                        let conn_shutdown = shutdown.clone();
+                        let tls = tls_acceptor.clone();
                         tokio::spawn(async move {
-                            let io = TokioIo::new(stream);
-                            let svc = service_fn(move |req| {
-                                let r = runtime.clone();
-                                async move { handle_request(req, r).await }
-                            });
-                            let builder = auto::Builder::new(TokioExecutor::new());
-                            let conn = builder.serve_connection(io, svc);
-                            tokio::select! {
-                                res = conn => {
-                                    if let Err(e) = res {
-                                        tracing::debug!(%peer, "connection ended with error: {e}");
-                                    }
-                                }
-                                _ = conn_shutdown.changed() => {
-                                    tracing::debug!(%peer, "connection dropped on shutdown");
-                                }
-                            }
+                            serve_one(stream, peer, runtime, tls, conn_shutdown).await;
                         });
                     }
                     Err(e) => {
@@ -128,6 +127,54 @@ async fn accept_loop(
                 }
             }
         }
+    }
+}
+
+async fn serve_one(
+    stream: tokio::net::TcpStream,
+    peer: std::net::SocketAddr,
+    runtime: Arc<UpstreamRuntime>,
+    tls_acceptor: Option<TlsAcceptor>,
+    mut conn_shutdown: watch::Receiver<bool>,
+) {
+    let svc = service_fn({
+        let runtime = runtime.clone();
+        move |req| {
+            let r = runtime.clone();
+            async move { handle_request(req, r).await }
+        }
+    });
+    let builder = auto::Builder::new(TokioExecutor::new());
+
+    macro_rules! serve_with_io {
+        ($io:expr) => {{
+            let conn = builder.serve_connection($io, svc);
+            tokio::select! {
+                res = conn => {
+                    if let Err(e) = res {
+                        tracing::debug!(%peer, "connection ended with error: {e}");
+                    }
+                }
+                _ = conn_shutdown.changed() => {
+                    tracing::debug!(%peer, "connection dropped on shutdown");
+                }
+            }
+        }};
+    }
+
+    if let Some(acceptor) = tls_acceptor {
+        match acceptor.accept(stream).await {
+            Ok(tls_stream) => {
+                let io = TokioIo::new(tls_stream);
+                serve_with_io!(io);
+            }
+            Err(e) => {
+                tracing::debug!(%peer, "TLS handshake failed: {e}");
+            }
+        }
+    } else {
+        let io = TokioIo::new(stream);
+        serve_with_io!(io);
     }
 }
 
