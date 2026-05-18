@@ -24,6 +24,27 @@
 //!    here, and extend the `compile_error!` guard in `lib.rs`.
 //! 5. Add a `tests/otel_v0_X.rs` patterned on the existing one.
 
+use std::net::SocketAddr;
+
+use http::{Method, Uri, Version};
+
+/// Inputs needed to build the server span for one inbound request.
+///
+/// Lives in `mod.rs` so the version-specific impl modules and the
+/// no-op stub share the same shape and the call site in `listener.rs`
+/// constructs it once.
+#[allow(dead_code)]
+pub(crate) struct ServerSpanInputs<'a> {
+    pub method: &'a Method,
+    pub uri: &'a Uri,
+    pub version: Version,
+    pub peer: SocketAddr,
+    pub bind_addr: SocketAddr,
+    pub scheme: &'static str,
+    pub user_agent: Option<&'a str>,
+    pub upstream_name: &'a str,
+}
+
 #[cfg(feature = "otel_0_27")]
 #[path = "v0_27.rs"]
 mod inner;
@@ -38,10 +59,10 @@ mod inner {
     //! blocks). They exist so the API surface in `mod.rs` is stable and
     //! the future stubs/version impls stay symmetric.
 
-    use std::net::SocketAddr;
-
-    use http::{HeaderMap, Method, StatusCode, Uri, Version};
+    use http::{HeaderMap, Method, StatusCode, Uri};
     use tracing::Span;
+
+    use super::ServerSpanInputs;
 
     /// Opaque parent context. Empty when the feature is off.
     #[derive(Debug, Default)]
@@ -51,16 +72,7 @@ mod inner {
         ParentContext
     }
 
-    pub(crate) fn make_server_span(
-        _method: &Method,
-        _uri: &Uri,
-        _version: Version,
-        _peer: SocketAddr,
-        _bind_addr: SocketAddr,
-        _scheme: &'static str,
-        _user_agent: Option<&str>,
-        _upstream_name: &str,
-    ) -> Span {
+    pub(crate) fn make_server_span(_inputs: &ServerSpanInputs<'_>) -> Span {
         Span::none()
     }
 

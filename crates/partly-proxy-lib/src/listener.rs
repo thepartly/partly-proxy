@@ -392,16 +392,16 @@ fn build_server_span(
             .headers
             .get(http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok());
-        let span = crate::otel::make_server_span(
-            &parts.method,
-            &parts.uri,
-            parts.version,
+        let span = crate::otel::make_server_span(&crate::otel::ServerSpanInputs {
+            method: &parts.method,
+            uri: &parts.uri,
+            version: parts.version,
             peer,
-            runtime.otel.bind_addr,
-            runtime.otel.scheme,
+            bind_addr: runtime.otel.bind_addr,
+            scheme: runtime.otel.scheme,
             user_agent,
-            &runtime.name,
-        );
+            upstream_name: &runtime.name,
+        });
         crate::otel::apply_parent(&span, parent);
         span
     }

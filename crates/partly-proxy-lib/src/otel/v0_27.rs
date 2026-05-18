@@ -4,8 +4,6 @@
 //! `opentelemetry_http_0_27`, …) declared in the workspace `Cargo.toml`
 //! so multiple OTEL minors can coexist.
 
-use std::net::SocketAddr;
-
 use http::{HeaderMap, Method, StatusCode, Uri, Version};
 use opentelemetry_0_27::{
     Context, global,
@@ -19,6 +17,8 @@ use opentelemetry_semantic_conventions_0_27::attribute::{
 };
 use tracing::Span;
 use tracing_opentelemetry_0_28::OpenTelemetrySpanExt;
+
+use super::ServerSpanInputs;
 
 const PARTLY_PROXY_UPSTREAM: &str = "partly.proxy.upstream";
 
@@ -38,41 +38,32 @@ pub(crate) fn extract_parent_context(headers: &HeaderMap) -> ParentContext {
     ParentContext(cx)
 }
 
-pub(crate) fn make_server_span(
-    method: &Method,
-    uri: &Uri,
-    version: Version,
-    peer: SocketAddr,
-    bind_addr: SocketAddr,
-    scheme: &'static str,
-    user_agent: Option<&str>,
-    upstream_name: &str,
-) -> Span {
-    let display_name = format!("{} {}", method.as_str(), upstream_name);
+pub(crate) fn make_server_span(inputs: &ServerSpanInputs<'_>) -> Span {
+    let display_name = format!("{} {}", inputs.method.as_str(), inputs.upstream_name);
     let span = tracing::info_span!(
         "http.server.request",
         otel.name = %display_name,
         otel.kind = "server",
     );
 
-    span.set_attribute(HTTP_REQUEST_METHOD, method.as_str().to_owned());
-    span.set_attribute(HTTP_ROUTE, upstream_name.to_owned());
-    span.set_attribute(URL_PATH, uri.path().to_owned());
-    if let Some(q) = uri.query() {
+    span.set_attribute(HTTP_REQUEST_METHOD, inputs.method.as_str().to_owned());
+    span.set_attribute(HTTP_ROUTE, inputs.upstream_name.to_owned());
+    span.set_attribute(URL_PATH, inputs.uri.path().to_owned());
+    if let Some(q) = inputs.uri.query() {
         span.set_attribute(URL_QUERY, q.to_owned());
     }
-    span.set_attribute(URL_SCHEME, scheme);
-    span.set_attribute(SERVER_ADDRESS, bind_addr.ip().to_string());
-    span.set_attribute(SERVER_PORT, i64::from(bind_addr.port()));
-    span.set_attribute(CLIENT_ADDRESS, peer.ip().to_string());
-    span.set_attribute(CLIENT_PORT, i64::from(peer.port()));
-    if let Some(ua) = user_agent {
+    span.set_attribute(URL_SCHEME, inputs.scheme);
+    span.set_attribute(SERVER_ADDRESS, inputs.bind_addr.ip().to_string());
+    span.set_attribute(SERVER_PORT, i64::from(inputs.bind_addr.port()));
+    span.set_attribute(CLIENT_ADDRESS, inputs.peer.ip().to_string());
+    span.set_attribute(CLIENT_PORT, i64::from(inputs.peer.port()));
+    if let Some(ua) = inputs.user_agent {
         span.set_attribute(USER_AGENT_ORIGINAL, ua.to_owned());
     }
-    if let Some(v) = http_version_str(version) {
+    if let Some(v) = http_version_str(inputs.version) {
         span.set_attribute(NETWORK_PROTOCOL_VERSION, v);
     }
-    span.set_attribute(PARTLY_PROXY_UPSTREAM, upstream_name.to_owned());
+    span.set_attribute(PARTLY_PROXY_UPSTREAM, inputs.upstream_name.to_owned());
 
     span
 }

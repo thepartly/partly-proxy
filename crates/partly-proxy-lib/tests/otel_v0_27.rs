@@ -11,11 +11,7 @@
 
 #![cfg(feature = "otel_0_27")]
 
-use std::{
-    net::SocketAddr,
-    sync::{Mutex, MutexGuard, OnceLock},
-    time::Duration,
-};
+use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 
 use http::Method;
 use opentelemetry_0_27::{
@@ -29,7 +25,10 @@ use opentelemetry_sdk_0_27::{
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{ProxyClusterBuilder, ProxyConfig, UpstreamTarget};
 use serde_json::Value;
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::{Mutex, MutexGuard},
+    task::JoinHandle,
+};
 use tracing_subscriber::layer::SubscriberExt;
 
 const TRACE_ID: &str = "0af7651916cd43dd8448eb211c80319c";
@@ -68,12 +67,12 @@ fn init() -> &'static Harness {
 }
 
 /// Acquire the serial lock and reset the in-memory exporter so each
-/// scenario sees only its own spans.
-fn scenario() -> (&'static Harness, MutexGuard<'static, ()>) {
+/// scenario sees only its own spans. Async because the lock is a
+/// `tokio::sync::Mutex` — required so we can hold it across the
+/// request awaits without tripping `clippy::await_holding_lock`.
+async fn scenario() -> (&'static Harness, MutexGuard<'static, ()>) {
     let h = init();
-    // PoisonError from a prior failed test shouldn't stop the next one
-    // from running — recover the inner guard.
-    let guard = h.serial.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = h.serial.lock().await;
     h.exporter.reset();
     (h, guard)
 }
@@ -124,7 +123,7 @@ fn attr<'a>(
 
 #[tokio::test]
 async fn inbound_traceparent_is_extracted() {
-    let (h, _g) = scenario();
+    let (h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cluster = ProxyClusterBuilder::new()
         .add_upstream("api", base_cfg(echo_addr))
@@ -168,7 +167,7 @@ async fn inbound_traceparent_is_extracted() {
 
 #[tokio::test]
 async fn response_carries_traceparent_matching_trace_id() {
-    let (_h, _g) = scenario();
+    let (_h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cluster = ProxyClusterBuilder::new()
         .add_upstream("api", base_cfg(echo_addr))
@@ -204,7 +203,7 @@ async fn response_carries_traceparent_matching_trace_id() {
 
 #[tokio::test]
 async fn outbound_injection_off_by_default() {
-    let (_h, _g) = scenario();
+    let (_h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cluster = ProxyClusterBuilder::new()
         .add_upstream("api", base_cfg(echo_addr))
@@ -235,7 +234,7 @@ async fn outbound_injection_off_by_default() {
 
 #[tokio::test]
 async fn outbound_injection_when_enabled() {
-    let (_h, _g) = scenario();
+    let (_h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cfg = base_cfg(echo_addr).with_otel_propagation_to_upstream();
     let cluster = ProxyClusterBuilder::new()
@@ -265,7 +264,7 @@ async fn outbound_injection_when_enabled() {
 
 #[tokio::test]
 async fn extraction_can_be_disabled() {
-    let (h, _g) = scenario();
+    let (h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cfg = base_cfg(echo_addr).without_otel_extraction();
     let cluster = ProxyClusterBuilder::new()
@@ -301,7 +300,7 @@ async fn extraction_can_be_disabled() {
 
 #[tokio::test]
 async fn filter_skips_selected_requests() {
-    let (h, _g) = scenario();
+    let (h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cfg = base_cfg(echo_addr)
         .with_otel_filter(|_m: &Method, uri: &http::Uri| uri.path() != "/healthz");
@@ -331,7 +330,7 @@ async fn filter_skips_selected_requests() {
 
 #[tokio::test]
 async fn server_error_maps_to_error_status() {
-    let (h, _g) = scenario();
+    let (h, _g) = scenario().await;
     let (echo_addr, _t) = spawn_echo().await;
     let cluster = ProxyClusterBuilder::new()
         .add_upstream("api", base_cfg(echo_addr))
