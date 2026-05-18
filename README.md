@@ -18,11 +18,9 @@ api-proxy/
 │   ├── partly-proxy-runner/    # minimal hosting binary + /health, /ready
 │   └── partly-proxy-echo/      # deterministic test upstream
 ├── ts-client/                  # TypeScript client (@partly/proxy-client, npm target)
-├── docker/                     # Dockerfile + compose.yaml for the smoke stack
 ├── scripts/
 │   ├── test-unit.sh            # fmt + clippy + cargo test
-│   ├── test-ts.sh              # tsc + vitest
-│   └── test-docker.sh          # compose-based smoke test (fallback)
+│   └── test-ts.sh              # tsc + vitest
 ├── .github/workflows/ci.yml    # CI delegates to scripts/*.sh
 └── SPECIFICATION.md
 ```
@@ -101,9 +99,9 @@ await client.close();
 
 ## Running the tests
 
-The cargo test suite is the primary test path. Every scenario the spec
-describes is covered by an integration test against a real TCP socket /
-hyper listener — no mocked HTTP clients in the hot paths.
+Every scenario the spec describes is covered by an integration test against
+a real TCP socket / hyper listener — no mocked HTTP clients in the hot
+paths.
 
 ```bash
 # Rust: fmt + clippy (with -D warnings) + build + cargo test
@@ -111,14 +109,11 @@ scripts/test-unit.sh
 
 # TypeScript client: tsc + vitest
 scripts/test-ts.sh
-
-# Docker compose end-to-end smoke (fallback — slower)
-scripts/test-docker.sh
 ```
 
-All three scripts are the source of truth for what CI runs. The GitHub
-Actions workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-delegates to them.
+Both scripts are the source of truth for what CI runs. The GitHub Actions
+workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) delegates
+to them.
 
 ## Implementation status
 
@@ -138,4 +133,3 @@ Built incrementally as twelve slices, each commit producing a green tree
 | 9     | TLS (inbound + outbound, with custom CAs and dangerous-mode) |
 | 10    | Runner binary + `/health`, `/ready` endpoints |
 | 11    | TypeScript client + vitest |
-| 12    | Docker compose smoke test |

@@ -59,5 +59,5 @@ npm test
 
 The Vitest suite drives the client against an in-process mock TCP server, so
 it doesn't depend on a running Rust proxy. End-to-end coverage against the
-real `partly-proxy-runner` binary lives in the workspace-level Docker tests
-(see `scripts/test-docker.sh`).
+real `partly-proxy-runner` binary is provided by the Rust integration suite
+in `crates/partly-proxy-lib/tests/control_plane_tcp.rs`.
