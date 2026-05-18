@@ -1,11 +1,13 @@
-//! In-process command channel — see `SPECIFICATION.md` §12.1.
+//! In-process command channel — see `SPECIFICATION.md` §12.1 and §14.
 //!
-//! Slice 5 implements `Stub`, `ClearStubs`, `Pause`, `Resume`, `QueryTraffic`,
-//! and `ClearRecordings`. The blocking `AssertSeen` / `AssertCount` variants
-//! land in slice 8; the TCP JSON-Lines wire format in slice 7.
+//! Implements `Stub`, `ClearStubs`, `Pause`, `Resume`, `QueryTraffic`,
+//! `ClearRecordings`, `AssertSeen`, and `AssertCount`. The two assertion
+//! variants block until the predicate transitions or the supplied
+//! `timeout` elapses (wait-for semantics, §14.1) — overshoot also
+//! terminates `AssertCount` early.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -221,26 +223,122 @@ async fn dispatch(
             recorder.clear().await;
             CommandResponse::Ok
         }
-        Command::AssertSeen { filter, .. } => {
-            // Slice 5 immediate-evaluation stub. Slice 8 fills in the
-            // wait-for-with-timeout behaviour from §14.1.
-            let count = recorder.count_matching(|e| filter.matches(e)).await;
-            let passed = count >= 1;
-            CommandResponse::AssertionResult {
-                passed,
-                message: format!("matched {count} exchanges"),
-            }
+        Command::AssertSeen { filter, timeout } => {
+            wait_for_assertion(recorder, filter, *timeout, AssertionShape::Seen).await
         }
         Command::AssertCount {
-            filter, expected, ..
-        } => {
-            let count = recorder.count_matching(|e| filter.matches(e)).await;
-            let passed = count == *expected;
-            CommandResponse::AssertionResult {
-                passed,
-                message: format!("matched {count} of {expected} expected"),
+            filter,
+            expected,
+            timeout,
+        } => wait_for_assertion(recorder, filter, *timeout, AssertionShape::Count(*expected)).await,
+    }
+}
+
+/// Shape of the predicate driving the wait-for loop.
+#[derive(Debug, Clone, Copy)]
+enum AssertionShape {
+    Seen,
+    Count(usize),
+}
+
+#[derive(Debug)]
+enum AssertionVerdict {
+    Pending,
+    Passed(String),
+    Failed(String),
+}
+
+fn evaluate(shape: AssertionShape, count: usize) -> AssertionVerdict {
+    match shape {
+        AssertionShape::Seen => {
+            if count >= 1 {
+                AssertionVerdict::Passed(format!("matched {count} exchanges"))
+            } else {
+                AssertionVerdict::Pending
             }
         }
+        AssertionShape::Count(expected) => match count.cmp(&expected) {
+            std::cmp::Ordering::Equal => {
+                AssertionVerdict::Passed(format!("matched exactly {expected}"))
+            }
+            std::cmp::Ordering::Greater => {
+                // Overshoot is terminal — further traffic cannot bring the
+                // count back down, so fail fast instead of waiting out the
+                // clock (§14.1).
+                AssertionVerdict::Failed(format!(
+                    "matched {count} exchanges; expected exactly {expected} (overshoot)"
+                ))
+            }
+            std::cmp::Ordering::Less => AssertionVerdict::Pending,
+        },
+    }
+}
+
+/// Block until `shape` is satisfied or `timeout` elapses. A `timeout` of
+/// zero collapses to a single immediate evaluation (§14.1).
+async fn wait_for_assertion(
+    recorder: &Recorder,
+    filter: &TrafficFilter,
+    timeout: Duration,
+    shape: AssertionShape,
+) -> CommandResponse {
+    let deadline = Instant::now().checked_add(timeout);
+
+    loop {
+        // Register the waker BEFORE checking the predicate so a record()
+        // that lands between snapshot and await still wakes us.
+        let notify = recorder.on_insert();
+        let waiter = notify.notified();
+        tokio::pin!(waiter);
+        waiter.as_mut().enable();
+
+        let count = recorder.count_matching(|e| filter.matches(e)).await;
+        match evaluate(shape, count) {
+            AssertionVerdict::Passed(message) => {
+                return CommandResponse::AssertionResult {
+                    passed: true,
+                    message,
+                };
+            }
+            AssertionVerdict::Failed(message) => {
+                return CommandResponse::AssertionResult {
+                    passed: false,
+                    message,
+                };
+            }
+            AssertionVerdict::Pending => {}
+        }
+
+        // Timeout of zero — one evaluation, then fail.
+        if timeout.is_zero() {
+            return CommandResponse::AssertionResult {
+                passed: false,
+                message: format!("matched {count}; timeout=0 collapsed to immediate eval"),
+            };
+        }
+
+        let remaining = match deadline {
+            Some(d) => d.saturating_duration_since(Instant::now()),
+            None => Duration::from_secs(0),
+        };
+        if remaining.is_zero() {
+            return CommandResponse::AssertionResult {
+                passed: false,
+                message: format!("timeout after {timeout:?}; matched {count} exchanges at expiry"),
+            };
+        }
+
+        // Wait for either a fresh insertion or the deadline.
+        if tokio::time::timeout(remaining, waiter).await.is_err() {
+            let final_count = recorder.count_matching(|e| filter.matches(e)).await;
+            return CommandResponse::AssertionResult {
+                passed: false,
+                message: format!(
+                    "timeout after {timeout:?}; matched {final_count} exchanges at expiry"
+                ),
+            };
+        }
+        // Re-check on the next iteration.
     }
 }
 

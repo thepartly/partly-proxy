@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 use crate::config::RecordingConfig;
 use crate::error::{ProxyError, Result};
@@ -39,6 +39,10 @@ impl std::fmt::Debug for Recorder {
 struct RecorderInner {
     config: RecordingConfig,
     state: RwLock<RecorderState>,
+    /// Fired (via `notify_waiters`) every time a new exchange is recorded.
+    /// The wait-for assertion loop registers a waiter before each predicate
+    /// check, so notifications that arrive between checks are not lost.
+    on_insert: Notify,
 }
 
 struct RecorderState {
@@ -71,8 +75,17 @@ impl Recorder {
             inner: Arc::new(RecorderInner {
                 config,
                 state: RwLock::new(state),
+                on_insert: Notify::new(),
             }),
         })
+    }
+
+    /// Borrow the per-insert notifier. Callers that need to wait for new
+    /// exchanges should register a waiter via `notified()` *before* taking
+    /// their first predicate snapshot — that way a `record()` that lands
+    /// between snapshot and await still wakes them.
+    pub(crate) fn on_insert(&self) -> &Notify {
+        &self.inner.on_insert
     }
 
     /// Whether recording is enabled for this recorder.
@@ -107,12 +120,20 @@ impl Recorder {
 
         if self.inner.config.max_in_memory == 0 {
             // Cap of zero means "do not retain in memory" — disk-only mode.
+            // We still notify waiters because a disk-only recorder may be
+            // monitored by an external process tailing the NDJSON file.
+            drop(state);
+            self.inner.on_insert.notify_waiters();
             return Ok(());
         }
         while state.buffer.len() >= self.inner.config.max_in_memory {
             state.buffer.pop_front();
         }
         state.buffer.push_back(exchange);
+        // Drop the lock *before* notifying so the waiter that wakes up can
+        // grab the read lock without contending with us.
+        drop(state);
+        self.inner.on_insert.notify_waiters();
         Ok(())
     }
 
