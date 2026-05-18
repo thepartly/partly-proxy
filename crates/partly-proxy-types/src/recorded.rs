@@ -1,9 +1,4 @@
 //! On-the-wire data model for recorded exchanges — see `SPECIFICATION.md` §9.1.
-//!
-//! These types are owned (no borrows), `Serialize` + `Deserialize`, and
-//! round-trip cleanly through NDJSON. The recorder stores them; replay
-//! sources read them back; the JSON-Lines control plane carries them in
-//! response payloads.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -14,11 +9,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// One recorded request — see §9.1.
+/// One recorded request.
 ///
-/// `body_sha256` is the lowercase hex SHA-256 of `body` *after* any
-/// snapshot-boundary redaction has been applied (§6.4). The hash is the
-/// match key for `MethodPathAndBodyHash` replay lookups.
+/// `body_sha256` is computed *after* any snapshot-boundary redaction
+/// (§6.4) — it's the match key for `MethodPathAndBodyHash` replay lookups.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecordedRequest {
     pub method: String,
@@ -30,7 +24,6 @@ pub struct RecordedRequest {
 }
 
 impl RecordedRequest {
-    /// Build a recorded request from its raw parts and compute the body hash.
     pub fn from_parts(method: &Method, uri: &Uri, headers: &HeaderMap, body: Bytes) -> Self {
         let body_sha256 = sha256_hex(&body);
         Self {
@@ -42,14 +35,12 @@ impl RecordedRequest {
         }
     }
 
-    /// Rehash the body — used after mutating `body` in place, e.g. when
-    /// applying snapshot-boundary redaction.
+    /// Rehash after mutating `body` in place (e.g. snapshot redaction).
     pub fn recompute_hash(&mut self) {
         self.body_sha256 = sha256_hex(&self.body);
     }
 }
 
-/// One recorded response — see §9.1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecordedResponse {
     pub status: u16,
@@ -59,7 +50,6 @@ pub struct RecordedResponse {
 }
 
 impl RecordedResponse {
-    /// Build a recorded response from a fully-collected hyper response.
     pub fn from_parts(status: StatusCode, headers: &HeaderMap, body: Bytes) -> Self {
         Self {
             status: status.as_u16(),
@@ -68,24 +58,19 @@ impl RecordedResponse {
         }
     }
 
-    /// Convenience: drop the body and return just the status. Useful for
-    /// `TrafficFilter::status` matching without cloning bytes.
     pub fn status(&self) -> StatusCode {
         StatusCode::from_u16(self.status).unwrap_or(StatusCode::BAD_GATEWAY)
     }
 
-    /// Build a `RecordedResponse` from a hyper `Response<Bytes>` (the shape
-    /// the forwarder returns).
     pub fn from_hyper(resp: &Response<Bytes>) -> Self {
         Self::from_parts(resp.status(), resp.headers(), resp.body().clone())
     }
 }
 
-/// Either a recorded response or a stringified error description — see §9.1.
+/// Outcome of an exchange — a recorded response, or a transport-level error.
 ///
-/// The error case is distinct from "non-2xx response" — a 500 response *is*
-/// an `Outcome::Response(...)`; only transport-level failures (connection
-/// refused, body read truncated, etc.) become `Outcome::Error(...)`.
+/// A non-2xx response is still `Response(...)`; only transport failures
+/// (connect refused, body truncated, etc.) land as `Error { ... }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExchangeOutcome {
@@ -102,15 +87,13 @@ impl ExchangeOutcome {
     }
 }
 
-/// One complete recorded exchange — see §9.1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecordedExchange {
     pub id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
     pub timestamp: DateTime<Utc>,
-    /// Wall-clock duration of the exchange. Serialised as `duration_ms`
-    /// (an integer millisecond count) for cross-language friendliness.
+    /// Serialised as integer `duration_ms` for cross-language friendliness.
     #[serde(rename = "duration_ms", with = "duration_ms")]
     pub duration: Duration,
     pub request: RecordedRequest,
@@ -120,9 +103,8 @@ pub struct RecordedExchange {
 }
 
 impl RecordedExchange {
-    /// Construct an exchange with a fresh UUID and the current wall-clock
-    /// timestamp. Convenience for the lifecycle code; tests typically build
-    /// the struct literal directly.
+    /// Construct with a fresh UUID and wall-clock timestamp. Tests typically
+    /// build the struct literal directly.
     pub fn new(
         upstream: Option<String>,
         request: RecordedRequest,
@@ -141,7 +123,6 @@ impl RecordedExchange {
     }
 }
 
-/// Lowercase hex SHA-256 — exported for use by replay-source lookup.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -160,7 +141,6 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Serde adapter for `Bytes` <-> base64 string.
 mod base64_bytes {
     use base64::Engine;
     use bytes::Bytes;
@@ -180,15 +160,13 @@ mod base64_bytes {
     }
 }
 
-/// Serde adapter for `Duration` <-> integer milliseconds (u64).
 mod duration_ms {
     use std::time::Duration;
 
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        // Saturating cast keeps very long durations representable; the
-        // realistic ceiling (u64 millis = ~584 million years) never matters.
+        // Saturating cast: u64 millis tops out at ~584M years.
         let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
         s.serialize_u64(ms)
     }
@@ -207,7 +185,7 @@ mod tests {
 
     #[test]
     fn sha256_hex_matches_known_value() {
-        // From `echo -n hello | sha256sum`.
+        // `echo -n hello | sha256sum`
         assert_eq!(
             sha256_hex(b"hello"),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -231,7 +209,6 @@ mod tests {
     fn header_pairs_stringify_binary_values() {
         let mut h = HeaderMap::new();
         h.insert("ok", HeaderValue::from_static("yes"));
-        // Manually insert a binary value.
         h.insert(
             "bin",
             HeaderValue::from_bytes(b"\xff\xfe").expect("HeaderValue accepts bytes"),
@@ -292,7 +269,6 @@ mod tests {
             labels: BTreeMap::new(),
         };
         let json = serde_json::to_string(&ex).unwrap();
-        // Smoke-test the discriminator name lands as expected.
         assert!(json.contains("\"kind\":\"error\""));
         let back: RecordedExchange = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ex);
