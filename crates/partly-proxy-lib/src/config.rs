@@ -6,10 +6,9 @@
 //! point where each field is used (when the listener binds, when the outbound
 //! client is built, etc.).
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
-
 #[cfg(feature = "_otel_any")]
 use std::sync::Arc;
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 #[cfg(feature = "_otel_any")]
 use http::{Method, Uri};

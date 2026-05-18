@@ -23,8 +23,7 @@ use opentelemetry_0_27::{
     trace::{SpanKind, Status, TraceContextExt, TracerProvider as _},
 };
 use opentelemetry_sdk_0_27::{
-    propagation::TraceContextPropagator,
-    testing::trace::InMemorySpanExporter,
+    propagation::TraceContextPropagator, testing::trace::InMemorySpanExporter,
     trace::TracerProvider,
 };
 use partly_proxy_echo as echo;
@@ -104,7 +103,9 @@ fn base_cfg(echo_addr: SocketAddr) -> ProxyConfig {
     )
 }
 
-fn server_spans(spans: &[opentelemetry_sdk_0_27::export::trace::SpanData]) -> Vec<&opentelemetry_sdk_0_27::export::trace::SpanData> {
+fn server_spans(
+    spans: &[opentelemetry_sdk_0_27::export::trace::SpanData],
+) -> Vec<&opentelemetry_sdk_0_27::export::trace::SpanData> {
     spans
         .iter()
         .filter(|s| s.span_kind == SpanKind::Server)
@@ -365,18 +366,15 @@ async fn server_error_maps_to_error_status() {
 }
 
 fn echoed_header(body: &Value, name: &str) -> Option<String> {
-    body.get("headers")?
-        .as_array()?
-        .iter()
-        .find_map(|kv| {
-            let arr = kv.as_array()?;
-            let key = arr.first()?.as_str()?;
-            if key.eq_ignore_ascii_case(name) {
-                arr.get(1)?.as_str().map(str::to_owned)
-            } else {
-                None
-            }
-        })
+    body.get("headers")?.as_array()?.iter().find_map(|kv| {
+        let arr = kv.as_array()?;
+        let key = arr.first()?.as_str()?;
+        if key.eq_ignore_ascii_case(name) {
+            arr.get(1)?.as_str().map(str::to_owned)
+        } else {
+            None
+        }
+    })
 }
 
 fn opt_str(v: &opentelemetry_0_27::Value) -> Option<String> {

@@ -135,4 +135,3 @@ fn http_version_str(v: Version) -> Option<&'static str> {
         _ => None,
     }
 }
-

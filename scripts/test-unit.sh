@@ -36,7 +36,7 @@ echo "==> cargo test -p partly-proxy-lib --no-default-features --lib"
 cargo test -p partly-proxy-lib --no-default-features --lib
 
 echo "==> cargo build --workspace --all-targets"
-cargo build --workspace --all-targets
+cargo build --workspace --all-targets --all-features
 
 echo "==> cargo test --workspace --all-targets $*"
-cargo test --workspace --all-targets "$@"
+cargo test --workspace --all-targets --all-features "$@"

@@ -127,8 +127,7 @@ impl Forwarder {
         // unconditionally under the feature so the proxy's own timing is
         // visible even when the upstream isn't on the trace path.
         #[cfg(feature = "_otel_any")]
-        let client_span =
-            crate::otel::make_client_span(&req.method, &outbound_uri, upstream_name);
+        let client_span = crate::otel::make_client_span(&req.method, &outbound_uri, upstream_name);
 
         if let Some(headers) = builder.headers_mut() {
             *headers = req.headers.clone();
