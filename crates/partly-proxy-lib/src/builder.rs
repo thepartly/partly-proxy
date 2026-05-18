@@ -11,13 +11,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use partly_proxy_types::{ProxyError, Result};
 use tokio::sync::watch;
 
 use crate::cluster::{ClusterHandle, RunningUpstream};
 use crate::command;
 use crate::config::{ProxyConfig, RecordingConfig};
 use crate::control_plane;
-use crate::error::{ProxyError, Result};
 use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
 use crate::recorder::Recorder;

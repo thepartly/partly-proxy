@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
+use partly_proxy_types::{ProxyError, Result};
+
 use crate::assertions::TrafficFilter;
-use crate::error::{ProxyError, Result};
 use crate::recorded::RecordedExchange;
 use crate::recorder::Recorder;
 use crate::stub::{RequestMatcher, StubEntry, StubbedResponse};

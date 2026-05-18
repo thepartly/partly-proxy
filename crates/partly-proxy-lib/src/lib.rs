@@ -12,7 +12,6 @@ pub mod command;
 pub mod config;
 pub mod context;
 mod control_plane;
-pub mod error;
 mod forwarder;
 mod listener;
 pub mod middleware;
@@ -34,8 +33,8 @@ pub use config::{
     InboundTlsConfig, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
 };
 pub use context::RequestContext;
-pub use error::{ProxyError, Result};
 pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};
+pub use partly_proxy_types::{ProxyError, Result};
 pub use proxy_io::{ProxyRequest, ProxyResponse};
 pub use recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 pub use recorder::Recorder;

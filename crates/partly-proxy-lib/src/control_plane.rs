@@ -13,8 +13,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use partly_proxy_types::{ProxyError, Result};
+
 use crate::command::CommandSender;
-use crate::error::{ProxyError, Result};
 use crate::wire::{WireCommand, WireResponse};
 
 /// Result of [`spawn_tcp_control_plane`].

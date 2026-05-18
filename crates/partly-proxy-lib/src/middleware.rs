@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use partly_proxy_types::Result;
+
 use crate::context::RequestContext;
-use crate::error::Result;
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 
 /// Object-safe middleware trait. Implementors live behind
@@ -122,9 +123,9 @@ pub(crate) async fn run_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ProxyError;
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode, Uri};
+    use partly_proxy_types::ProxyError;
 
     /// Test terminal: returns a fixed 404 with the request body echoed.
     struct FakeTerminal;

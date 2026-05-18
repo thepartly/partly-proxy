@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use partly_proxy_types::{ProxyError, Result};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::command::CommandSender;
 use crate::config::RecordingConfig;
 use crate::control_plane::RunningControlPlane;
-use crate::error::{ProxyError, Result};
 use crate::recorder::Recorder;
 
 /// Per-upstream metadata tracked by the handle.

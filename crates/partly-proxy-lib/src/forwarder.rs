@@ -17,8 +17,9 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 
+use partly_proxy_types::{ProxyError, Result};
+
 use crate::config::UpstreamTarget;
-use crate::error::{ProxyError, Result};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 use crate::tls::build_client_config;
 

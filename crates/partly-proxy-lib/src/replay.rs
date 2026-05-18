@@ -23,12 +23,13 @@ use std::io::{BufRead, BufReader};
 #[cfg(feature = "storage-jsonl")]
 use std::path::Path;
 
-use crate::error::Result;
+use partly_proxy_types::Result;
 // `ProxyError` is only constructed by the JSONL loader path (and the
 // from_storage tests). Gate the import accordingly to keep
 // --no-default-features warning-free.
 #[cfg(any(test, feature = "storage-jsonl"))]
-use crate::error::ProxyError;
+use partly_proxy_types::ProxyError;
+
 use crate::middleware::{self, SharedMiddleware};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 use crate::recorded::{sha256_hex, ExchangeOutcome, RecordedExchange, RecordedRequest};

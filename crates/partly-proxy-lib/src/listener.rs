@@ -24,9 +24,10 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use partly_proxy_types::{ProxyError, Result};
+
 use crate::builder::UpstreamSpec;
 use crate::context::RequestContext;
-use crate::error::{ProxyError, Result};
 use crate::forwarder::Forwarder;
 use crate::middleware::{self, SharedMiddleware, Terminal, TerminalFuture};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};

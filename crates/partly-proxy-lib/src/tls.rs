@@ -14,7 +14,7 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCert
 use tokio_rustls::TlsAcceptor;
 
 use crate::config::{InboundTlsConfig, UpstreamTlsConfig};
-use crate::error::{ProxyError, Result};
+use partly_proxy_types::{ProxyError, Result};
 
 /// Idempotently install the `ring` crypto provider as the rustls default.
 /// rustls 0.23 requires an explicit provider before any config is built; if

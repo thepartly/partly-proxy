@@ -15,8 +15,9 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
+use partly_proxy_types::Result;
+
 use crate::config::RecordingConfig;
-use crate::error::Result;
 use crate::recorded::RecordedExchange;
 use crate::storage::SharedStorage;
 
