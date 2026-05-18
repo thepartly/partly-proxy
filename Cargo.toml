@@ -49,6 +49,11 @@ async-trait = "0.1"
 futures = "0.3"
 async-stream = "0.3"
 
+# SQLite backend uses sqlx for native-async DB access. Runtime queries
+# only (no `macros` feature) so consumers don't need a provisioned
+# DATABASE_URL during cargo build.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+
 # Matching
 regex = "1"
 

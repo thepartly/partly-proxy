@@ -17,12 +17,10 @@ categories = ["development-tools::testing", "network-programming"]
 # .scratch/MULTI_BACKEND_IMPLEMENTATION.md slice 2.
 default = ["storage-jsonl"]
 storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
-# `storage-sqlite` + `storage-object` slots are reserved for slices 6 / 7.
-# Listed as feature names with no `dep:` line until the crates land — that
-# way callers can already write `features = ["storage-sqlite"]` in advance
-# without breaking; the no-op feature toggles a `cfg` flag but pulls in
-# nothing. Slice 6/7 add the `dep:` line.
-storage-sqlite = []
+storage-sqlite = ["dep:partly-proxy-storage-sqlite"]
+# `storage-object` slot is reserved for slice 7. Listed as a feature name
+# with no `dep:` line until the crate lands — that way callers can already
+# write `features = ["storage-object"]` in advance without breaking.
 storage-object = []
 testing = []
 
@@ -52,6 +50,7 @@ partly-proxy-types = { path = "../partly-proxy-types" }
 # etc., and lets `Recorder::new` open the default JSONL backend when
 # the matching feature is on.
 partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional = true }
+partly-proxy-storage-sqlite = { path = "../partly-proxy-storage-sqlite", optional = true }
 
 tokio = { workspace = true }
 bytes = { workspace = true }

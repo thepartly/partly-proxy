@@ -52,4 +52,9 @@ pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
 /// `storage-jsonl` feature is on (which it is by default).
 #[cfg(feature = "storage-jsonl")]
 pub use partly_proxy_storage_jsonl as jsonl;
+
+/// Re-export of the SQLite snapshot backend, available when the
+/// `storage-sqlite` feature is on.
+#[cfg(feature = "storage-sqlite")]
+pub use partly_proxy_storage_sqlite as sqlite;
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};
