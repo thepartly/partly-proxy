@@ -32,7 +32,7 @@ pub mod wire;
 
 pub use assertions::TrafficFilter;
 pub use builder::ProxyClusterBuilder;
-pub use cluster::ClusterHandle;
+pub use cluster::{ClusterHandle, UpstreamStatus};
 pub use command::{Command, CommandResponse, CommandSender};
 pub use config::{
     InboundTlsConfig, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
