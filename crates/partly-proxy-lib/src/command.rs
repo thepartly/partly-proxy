@@ -393,23 +393,23 @@ mod tests {
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode};
 
-    async fn fixture() -> (
+    fn fixture() -> (
         SharedUpstreamRegistry,
         Recorder,
         tokio::sync::watch::Sender<bool>,
     ) {
-        let runtime = Arc::new(UpstreamRuntime::test_only("api").await);
+        let runtime = Arc::new(UpstreamRuntime::test_only("api"));
         let mut registry = UpstreamRegistry::default();
         registry.insert(runtime);
         let shared = Arc::new(registry);
-        let recorder = Recorder::new(RecordingConfig::in_memory(10)).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::in_memory(10));
         let (tx, _rx) = tokio::sync::watch::channel(false);
         (shared, recorder, tx)
     }
 
     #[tokio::test]
     async fn stub_command_inserts_into_store() {
-        let (registry, recorder, _shutdown_tx) = fixture().await;
+        let (registry, recorder, _shutdown_tx) = fixture();
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
@@ -433,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn stub_against_unknown_upstream_yields_error_response() {
-        let (registry, recorder, _) = fixture().await;
+        let (registry, recorder, _) = fixture();
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (sender, task) = spawn_processor(registry, recorder, shutdown_rx);
 
@@ -457,7 +457,7 @@ mod tests {
 
     #[tokio::test]
     async fn stub_with_none_upstream_resolves_when_single() {
-        let (registry, recorder, _) = fixture().await;
+        let (registry, recorder, _) = fixture();
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
@@ -479,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn pause_and_resume_flip_the_watch() {
-        let (registry, recorder, _) = fixture().await;
+        let (registry, recorder, _) = fixture();
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (sender, task) = spawn_processor(registry.clone(), recorder, shutdown_rx);
 
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_recordings_empties_the_recorder() {
-        let (registry, recorder, _) = fixture().await;
+        let (registry, recorder, _) = fixture();
         // Seed a couple of fake exchanges.
         let make = || {
             let req = RecordedRequest::from_parts(

@@ -204,7 +204,7 @@ impl ProxyClusterBuilder {
 
         let recorder = match self.storage.clone() {
             Some(storage) => Recorder::with_storage(self.recording.clone(), Some(storage)),
-            None => Recorder::new(self.recording.clone()).await?,
+            None => Recorder::new(self.recording.clone()),
         };
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut upstreams = BTreeMap::new();

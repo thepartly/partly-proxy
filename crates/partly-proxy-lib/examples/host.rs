@@ -9,6 +9,10 @@
 //! cargo run --example host -p partly-proxy-lib
 //! ```
 //!
+//! Set `PARTLY_PROXY_RECORDING_PATH=/tmp/trace.ndjson` to additionally
+//! persist exchanges to NDJSON via the `partly-proxy-storage-jsonl`
+//! backend.
+//!
 //! This is a starting point — production deployments should write their own
 //! binary that adds whatever framing their infrastructure needs (health
 //! probes, metrics, config-file parsing, etc.). The point of the example
@@ -16,8 +20,11 @@
 //! things.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use partly_proxy_lib::{ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, UpstreamTarget};
+use partly_proxy_lib::{
+    ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, UpstreamTarget,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,19 +47,25 @@ async fn main() -> Result<()> {
             v.parse()
                 .expect("PARTLY_PROXY_TCP_CONTROL_BIND must be a valid SocketAddr")
         });
-    let recording = std::env::var("PARTLY_PROXY_RECORDING_PATH")
-        .ok()
-        .map(|p| RecordingConfig::persisted(10_000, p.into()))
-        .unwrap_or_default();
+
+    let storage: Option<SharedStorage> = match std::env::var("PARTLY_PROXY_RECORDING_PATH").ok() {
+        Some(path) => Some(Arc::new(
+            partly_proxy_lib::jsonl::JsonlStorage::open(path).await?,
+        )),
+        None => None,
+    };
 
     let mut builder = ProxyClusterBuilder::new()
-        .recording(recording)
+        .recording(RecordingConfig::in_memory(10_000))
         .add_upstream(
             "upstream",
             ProxyConfig::http(proxy_bind, UpstreamTarget::new(upstream_url)),
         );
     if let Some(addr) = tcp_control_bind {
         builder = builder.tcp_control_plane(addr);
+    }
+    if let Some(storage) = storage {
+        builder = builder.storage(storage);
     }
 
     let cluster = builder.run().await?;

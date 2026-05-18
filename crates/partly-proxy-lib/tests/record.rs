@@ -132,11 +132,25 @@ async fn ndjson_persist_file_is_replayable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.ndjson");
     let (echo_addr, _echo_task) = spawn_echo().await;
-    let cluster = spawn_proxy(
-        format!("http://{echo_addr}"),
-        RecordingConfig::persisted(100, path.clone()),
-    )
-    .await;
+
+    let storage: partly_proxy_lib::SharedStorage = std::sync::Arc::new(
+        partly_proxy_lib::jsonl::JsonlStorage::open(&path)
+            .await
+            .unwrap(),
+    );
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{echo_addr}"))
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .storage(storage)
+        .add_upstream("upstream", cfg)
+        .run()
+        .await
+        .unwrap();
     let proxy_addr = cluster.addr("upstream").unwrap();
 
     for n in 0..3 {

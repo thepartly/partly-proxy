@@ -31,7 +31,6 @@ impl std::fmt::Debug for Recorder {
         f.debug_struct("Recorder")
             .field("enabled", &self.inner.config.enabled)
             .field("max_in_memory", &self.inner.config.max_in_memory)
-            .field("persist_path", &self.inner.config.persist_path)
             .field("has_storage", &self.inner.storage.is_some())
             .finish_non_exhaustive()
     }
@@ -53,30 +52,19 @@ struct RecorderState {
 }
 
 impl Recorder {
-    /// Build a recorder. If `config.persist_path` is set, the appropriate
-    /// default storage backend is opened:
-    ///
-    /// - With the `storage-jsonl` feature on (default), `persist_path` is
-    ///   wired into a [`JsonlStorage`](crate::jsonl::JsonlStorage). Any
-    ///   error from opening the file surfaces as `ProxyError::Recording`.
-    /// - With `storage-jsonl` off, `persist_path` is silently honoured as
-    ///   "in-memory only" plus a warning log — callers should pass a
-    ///   [`SharedStorage`] of their choice via
-    ///   [`Recorder::with_storage`] instead.
-    ///
-    /// Callers that already hold a constructed [`SharedStorage`] (any
-    /// backend) should use [`Recorder::with_storage`] directly.
-    pub async fn new(config: RecordingConfig) -> Result<Self> {
-        let storage = build_default_storage(&config).await?;
-        Ok(Self::with_storage(config, storage))
+    /// Build an in-memory-only recorder. Persistence — NDJSON,
+    /// `SQLite`, object store, or anything else implementing
+    /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured by
+    /// constructing the backend yourself and threading it through
+    /// [`Recorder::with_storage`] or
+    /// [`ProxyClusterBuilder::storage`](crate::ProxyClusterBuilder::storage).
+    pub fn new(config: RecordingConfig) -> Self {
+        Self::with_storage(config, None)
     }
 
     /// Build a recorder from an already-constructed storage backend.
     /// Synchronous — no I/O. The caller owns the file/connection
     /// lifecycle that produced `storage`.
-    ///
-    /// If `storage` is `None`, the recorder is in-memory only regardless
-    /// of `config.persist_path`.
     pub fn with_storage(config: RecordingConfig, storage: Option<SharedStorage>) -> Self {
         let initial_capacity = config.max_in_memory.min(1024);
         Self {
@@ -235,33 +223,6 @@ impl Recorder {
     }
 }
 
-/// Resolve `config.persist_path` into the default storage backend. With
-/// `storage-jsonl` on we open a `JsonlStorage`; off, we warn and return
-/// `None` (in-memory only).
-#[cfg(feature = "storage-jsonl")]
-async fn build_default_storage(config: &RecordingConfig) -> Result<Option<SharedStorage>> {
-    match &config.persist_path {
-        Some(path) => {
-            let storage = crate::jsonl::JsonlStorage::open(path.clone()).await?;
-            let shared: SharedStorage = Arc::new(storage);
-            Ok(Some(shared))
-        }
-        None => Ok(None),
-    }
-}
-
-#[cfg(not(feature = "storage-jsonl"))]
-async fn build_default_storage(config: &RecordingConfig) -> Result<Option<SharedStorage>> {
-    if config.persist_path.is_some() {
-        tracing::warn!(
-            "RecordingConfig.persist_path is set but the `storage-jsonl` feature is off; \
-             falling back to in-memory only. Pass a custom SharedStorage via \
-             Recorder::with_storage if you need persistence."
-        );
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn records_and_reads_back_in_order() {
-        let recorder = Recorder::new(RecordingConfig::in_memory(10)).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::in_memory(10));
         recorder.record(make_exchange("/a", b"1")).await.unwrap();
         recorder.record(make_exchange("/b", b"2")).await.unwrap();
         let all = recorder.exchanges().await;
@@ -303,14 +264,14 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_recorder_is_a_noop() {
-        let recorder = Recorder::new(RecordingConfig::disabled()).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::disabled());
         recorder.record(make_exchange("/a", b"")).await.unwrap();
         assert_eq!(recorder.len().await, 0);
     }
 
     #[tokio::test]
     async fn fifo_eviction_drops_oldest_at_capacity() {
-        let recorder = Recorder::new(RecordingConfig::in_memory(3)).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::in_memory(3));
         for i in 0..5 {
             recorder
                 .record(make_exchange(&format!("/{i}"), b""))
@@ -325,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_empties_buffer() {
-        let recorder = Recorder::new(RecordingConfig::in_memory(10)).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::in_memory(10));
         recorder.record(make_exchange("/a", b"")).await.unwrap();
         assert_eq!(recorder.len().await, 1);
         recorder.clear().await;
@@ -334,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn predicate_scans_filter_correctly() {
-        let recorder = Recorder::new(RecordingConfig::in_memory(10)).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::in_memory(10));
         recorder.record(make_exchange("/a", b"")).await.unwrap();
         recorder.record(make_exchange("/b", b"")).await.unwrap();
         recorder.record(make_exchange("/b", b"")).await.unwrap();
@@ -351,12 +312,12 @@ mod tests {
 
     #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
-    async fn persist_path_writes_ndjson_lines() {
+    async fn jsonl_storage_persists_each_record() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.ndjson");
-        let recorder = Recorder::new(RecordingConfig::persisted(10, path.clone()))
-            .await
-            .unwrap();
+        let storage: SharedStorage =
+            Arc::new(crate::jsonl::JsonlStorage::open(&path).await.unwrap());
+        let recorder = Recorder::with_storage(RecordingConfig::in_memory(10), Some(storage));
         recorder
             .record(make_exchange("/a", b"hello"))
             .await
@@ -366,8 +327,8 @@ mod tests {
             .await
             .unwrap();
         // Flush to fence any background buffer state — the BufWriter
-        // inside JsonlStorage already flushed each line, so this is a
-        // no-op but exercises the new API.
+        // inside JsonlStorage already flushed each line, so this only
+        // adds an fsync.
         recorder.flush().await.unwrap();
 
         let raw = tokio::fs::read_to_string(&path).await.unwrap();

@@ -78,7 +78,8 @@ Scheme is auto-detected from `base_url` — HTTP and HTTPS upstreams use the sam
 |-------|---------|---------|
 | `enabled: bool` | `true` | Whether exchanges are recorded |
 | `max_in_memory: usize` | `10_000` | Cap for the in-memory ring buffer (FIFO eviction) |
-| `persist_path: Option<PathBuf>` | `None` | If set, each exchange is appended to this file as a single JSON line |
+
+`RecordingConfig` controls only the in-memory ring. Durable persistence — NDJSON file, SQLite database, S3-compatible object store, or anything else implementing `SnapshotStorage` — is configured separately by passing a `SharedStorage` to `Recorder::with_storage` or `ProxyClusterBuilder::storage(...)`. Mixing the two concerns into a single `persist_path` field would couple the recording cap to one specific backend; the split keeps both axes independent.
 
 ### 3.4 `UpstreamTlsConfig`
 

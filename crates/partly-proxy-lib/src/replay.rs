@@ -384,16 +384,20 @@ mod tests {
     #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
     async fn from_jsonl_round_trips() {
-        // Build a recorder with persist enabled, drive some exchanges
-        // through it, then load that NDJSON file via ReplaySource.
+        // Build a recorder backed by an explicit JsonlStorage, drive
+        // some exchanges through it, then load that NDJSON file via
+        // ReplaySource.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.ndjson");
-        let recorder = crate::recorder::Recorder::new(crate::config::RecordingConfig::persisted(
-            100,
-            path.clone(),
-        ))
-        .await
-        .unwrap();
+        let storage: crate::storage::SharedStorage = Arc::new(
+            crate::jsonl::JsonlStorage::open(&path)
+                .await
+                .expect("open jsonl"),
+        );
+        let recorder = crate::recorder::Recorder::with_storage(
+            crate::config::RecordingConfig::in_memory(100),
+            Some(storage),
+        );
         for n in 0..3 {
             let req = RecordedRequest::from_parts(
                 &Method::GET,

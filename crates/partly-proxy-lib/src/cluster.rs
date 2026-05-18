@@ -186,9 +186,9 @@ mod tests {
     use crate::command;
     use crate::upstream::UpstreamRegistry;
 
-    async fn empty() -> ClusterHandle {
+    fn empty() -> ClusterHandle {
         let (tx, rx) = watch::channel(false);
-        let recorder = Recorder::new(RecordingConfig::default()).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::default());
         let registry = std::sync::Arc::new(UpstreamRegistry::default());
         let (sender, task) = command::spawn_processor(registry, recorder.clone(), rx);
         ClusterHandle::new(
@@ -204,14 +204,14 @@ mod tests {
 
     #[tokio::test]
     async fn empty_handle_reports_no_upstreams() {
-        let h = empty().await;
+        let h = empty();
         assert!(h.upstream_names().is_empty());
         assert!(h.addr("nope").is_none());
     }
 
     #[tokio::test]
     async fn shutdown_empty_cluster_succeeds_immediately() {
-        let h = empty().await;
+        let h = empty();
         h.shutdown().await.unwrap();
     }
 }

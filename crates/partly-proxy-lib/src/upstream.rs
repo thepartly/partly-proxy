@@ -65,9 +65,9 @@ impl UpstreamRuntime {
     /// Cheap test constructor that fills the runtime with placeholder
     /// values. Used only by unit tests in the `command` module.
     #[cfg(test)]
-    pub(crate) async fn test_only(name: &str) -> Self {
+    pub(crate) fn test_only(name: &str) -> Self {
         use crate::config::{RecordingConfig, UpstreamTarget};
-        let recorder = Recorder::new(RecordingConfig::disabled()).await.unwrap();
+        let recorder = Recorder::new(RecordingConfig::disabled());
         let forwarder =
             Forwarder::new(UpstreamTarget::new("http://127.0.0.1:1")).expect("forwarder builds");
         Self::new(name.to_owned(), forwarder, recorder, Vec::new(), None)

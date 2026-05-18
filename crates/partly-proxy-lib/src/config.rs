@@ -94,14 +94,20 @@ impl Default for UpstreamTarget {
 }
 
 /// Recording configuration — see `SPECIFICATION.md` §3.3.
+///
+/// Controls the recorder's in-memory ring buffer only. Persistence —
+/// NDJSON file, `SQLite` database, S3-compatible object store, or
+/// anything else implementing
+/// [`SnapshotStorage`](crate::SnapshotStorage) — is configured
+/// separately via
+/// [`Recorder::with_storage`](crate::Recorder::with_storage) or
+/// [`ProxyClusterBuilder::storage`](crate::ProxyClusterBuilder::storage).
 #[derive(Debug, Clone)]
 pub struct RecordingConfig {
     /// Whether exchanges are recorded at all.
     pub enabled: bool,
     /// Cap for the in-memory ring buffer; FIFO eviction once exceeded.
     pub max_in_memory: usize,
-    /// If set, each exchange is appended to this file as a single JSON line.
-    pub persist_path: Option<PathBuf>,
 }
 
 impl Default for RecordingConfig {
@@ -109,7 +115,6 @@ impl Default for RecordingConfig {
         Self {
             enabled: true,
             max_in_memory: 10_000,
-            persist_path: None,
         }
     }
 }
@@ -128,16 +133,6 @@ impl RecordingConfig {
         Self {
             enabled: true,
             max_in_memory,
-            persist_path: None,
-        }
-    }
-
-    /// In-memory plus NDJSON append-only persistence.
-    pub fn persisted(max_in_memory: usize, persist_path: PathBuf) -> Self {
-        Self {
-            enabled: true,
-            max_in_memory,
-            persist_path: Some(persist_path),
         }
     }
 }
@@ -200,7 +195,6 @@ mod tests {
         let r = RecordingConfig::default();
         assert!(r.enabled);
         assert_eq!(r.max_in_memory, 10_000);
-        assert!(r.persist_path.is_none());
     }
 
     #[test]
@@ -211,12 +205,10 @@ mod tests {
     }
 
     #[test]
-    fn recording_persisted_keeps_path() {
-        let p = PathBuf::from("/tmp/x.ndjson");
-        let r = RecordingConfig::persisted(500, p.clone());
+    fn recording_in_memory_carries_cap() {
+        let r = RecordingConfig::in_memory(500);
         assert!(r.enabled);
         assert_eq!(r.max_in_memory, 500);
-        assert_eq!(r.persist_path.as_deref(), Some(p.as_path()));
     }
 
     #[test]
