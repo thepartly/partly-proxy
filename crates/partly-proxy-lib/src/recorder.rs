@@ -15,10 +15,9 @@ use std::sync::Arc;
 
 use tokio::sync::{Notify, RwLock};
 
-use partly_proxy_types::{RecordedExchange, Result};
+use partly_proxy_types::{RecordedExchange, Result, SharedStorage};
 
 use crate::config::RecordingConfig;
-use crate::storage::SharedStorage;
 
 /// Cheap-to-clone handle on the shared recorder.
 #[derive(Clone)]

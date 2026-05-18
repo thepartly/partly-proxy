@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use partly_proxy_types::{ProxyError, Result};
+use partly_proxy_types::{ProxyError, Result, SharedStorage};
 use tokio::sync::watch;
 
 use crate::cluster::{ClusterHandle, RunningUpstream};
@@ -22,7 +22,6 @@ use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
 use crate::recorder::Recorder;
 use crate::replay::ReplaySource;
-use crate::storage::SharedStorage;
 use crate::upstream::UpstreamRegistry;
 
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).

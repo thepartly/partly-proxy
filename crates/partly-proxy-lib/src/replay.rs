@@ -24,7 +24,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use partly_proxy_types::recorded::sha256_hex;
-use partly_proxy_types::{ExchangeOutcome, RecordedExchange, RecordedRequest, Result};
+use partly_proxy_types::{
+    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage,
+};
 // `ProxyError` is only constructed by the JSONL loader path (and the
 // from_storage tests). Gate the import accordingly to keep
 // --no-default-features warning-free.
@@ -33,7 +35,6 @@ use partly_proxy_types::ProxyError;
 
 use crate::middleware::{self, SharedMiddleware};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
-use crate::storage::SnapshotStorage;
 
 /// Predicate type used by [`MatchStrategy::Custom`]. Defined as a type alias
 /// so the trait-object type doesn't trip clippy's `type_complexity` lint.
@@ -390,7 +391,7 @@ mod tests {
         // ReplaySource.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.ndjson");
-        let storage: crate::storage::SharedStorage = Arc::new(
+        let storage: partly_proxy_types::SharedStorage = Arc::new(
             crate::jsonl::JsonlStorage::open(&path)
                 .await
                 .expect("open jsonl"),

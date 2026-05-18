@@ -18,7 +18,6 @@ pub mod middleware;
 pub mod proxy_io;
 pub mod recorder;
 pub mod replay;
-pub mod storage;
 pub mod stub;
 mod tls;
 mod upstream;
@@ -35,11 +34,11 @@ pub use context::RequestContext;
 pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};
 pub use partly_proxy_types::{
     ExchangeOutcome, ProxyError, RecordedExchange, RecordedRequest, RecordedResponse, Result,
+    SharedStorage, SnapshotStorage,
 };
 pub use proxy_io::{ProxyRequest, ProxyResponse};
 pub use recorder::Recorder;
 pub use replay::{MatchStrategy, ReplaySource};
-pub use storage::{SharedStorage, SnapshotStorage};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};
 
