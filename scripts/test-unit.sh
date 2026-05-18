@@ -16,8 +16,10 @@ echo "==> cargo +nightly fmt --all -- --check"
 # so formatting must run under the nightly toolchain.
 cargo +nightly fmt --all -- --check
 
-echo "==> cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
+echo "==> cargo +stable clippy --workspace --all-targets -- -D warnings"
+# Pin clippy to stable: in CI the nightly rustfmt install leaves nightly
+# as the default toolchain, and clippy isn't installed there.
+cargo +stable clippy --workspace --all-targets -- -D warnings
 
 echo "==> cargo check --workspace --no-default-features"
 # Confirms the lib + every crate compiles with zero storage backends.
