@@ -1,5 +1,5 @@
-//! Integration tests for slice 2 — plain-HTTP forwarding from a real listener
-//! to a real (in-process) echo upstream.
+//! Plain-HTTP forwarding from a real listener to a real (in-process)
+//! echo upstream.
 //!
 //! Every test starts the echo server on an ephemeral port, builds a single
 //! proxy listener pointed at that echo, then exercises behaviour through a

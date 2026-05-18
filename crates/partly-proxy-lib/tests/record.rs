@@ -1,5 +1,4 @@
-//! Integration tests for slice 3 — end-to-end recording through a real
-//! listener + forwarder.
+//! End-to-end recording through a real listener + forwarder.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -167,7 +166,7 @@ async fn ndjson_persist_file_is_replayable() {
 }
 
 /// Storage backend that counts every `append` and `flush` it sees and
-/// keeps the exchanges in memory. Used to verify slice 4's
+/// keeps the exchanges in memory. Used to verify the
 /// `ProxyClusterBuilder::storage(...)` plumbing.
 #[derive(Debug, Default)]
 struct TrackingStorage {

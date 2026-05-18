@@ -1,6 +1,5 @@
-//! Integration tests for slice 4 — middleware chain wired through the live
-//! listener, with body rewrites, short-circuits, recovery, and
-//! snapshot-boundary redaction.
+//! Middleware chain wired through the live listener, with body
+//! rewrites, short-circuits, recovery, and snapshot-boundary redaction.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};

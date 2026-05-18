@@ -128,8 +128,8 @@ impl Recorder {
         // Hold the write lock across the storage call so the on-disk
         // order and the in-memory buffer order agree under concurrent
         // record() calls. Backend `append` impls have their own locking,
-        // but holding the outer RwLock preserves today's strict-ordering
-        // guarantee.
+        // but holding the outer RwLock here is what guarantees the two
+        // sides observe insertions in the same sequence.
         let mut state = self.inner.state.write().await;
 
         if let Some(storage) = &self.inner.storage {

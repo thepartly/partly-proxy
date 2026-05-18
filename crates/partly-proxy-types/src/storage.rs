@@ -47,7 +47,7 @@ pub trait SnapshotStorage: Send + Sync + std::fmt::Debug {
     async fn flush(&self) -> Result<()>;
 
     /// Streaming read in insertion order. Used by
-    /// `ReplaySource::from_storage` (slice 3).
+    /// `ReplaySource::from_storage` to materialise a snapshot.
     ///
     /// Returning a stream — not a `Vec` — preserves the spec's
     /// "100k-exchange single streaming pass" property (§8.1.1). Peak

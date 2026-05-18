@@ -142,7 +142,7 @@ impl RecordedExchange {
     }
 }
 
-/// Lowercase hex SHA-256 — exported for use by replay code in slice 6.
+/// Lowercase hex SHA-256 — exported for use by replay-source lookup.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);

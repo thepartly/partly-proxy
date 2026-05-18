@@ -12,9 +12,10 @@ keywords = ["proxy", "http", "testing", "record", "replay"]
 categories = ["development-tools::testing", "network-programming"]
 
 [features]
-# `storage-jsonl` on by default preserves source-compat for callers that
-# rely on `RecordingConfig::persisted(...)` to write NDJSON — see
-# .scratch/MULTI_BACKEND_IMPLEMENTATION.md slice 2.
+# `storage-jsonl` is in the default set so callers that pass
+# `RecordingConfig::persisted(path)` get NDJSON persistence with zero
+# extra configuration. Opt out via `default-features = false` to keep
+# the dependency closure minimal.
 default = ["storage-jsonl"]
 storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
 storage-sqlite = ["dep:partly-proxy-storage-sqlite"]

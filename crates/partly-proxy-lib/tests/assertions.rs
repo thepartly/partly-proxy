@@ -1,4 +1,5 @@
-//! Integration tests for slice 8 — blocking `AssertSeen` and `AssertCount`.
+//! Wait-for semantics of `AssertSeen` and `AssertCount` (see
+//! `SPECIFICATION.md` §14.1).
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};

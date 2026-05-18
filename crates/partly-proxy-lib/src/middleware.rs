@@ -3,8 +3,7 @@
 //! See `SPECIFICATION.md` §6. There is exactly one middleware chain per
 //! request: global middleware first (in registration order), then per-upstream
 //! middleware (in the order passed to `add_upstream_with_middleware`), then
-//! the terminal stages (slice 5 will add stubs and slice 6 will add replay
-//! ahead of the forwarder).
+//! the terminal stages (stub scan → replay lookup → outbound forward).
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,9 +46,9 @@ pub type TerminalFuture<'a> =
     Pin<Box<dyn std::future::Future<Output = Result<ProxyResponse>> + Send + 'a>>;
 
 /// Terminal stage at the end of the middleware chain. Production code
-/// supplies a [`LiveTerminal`](crate::listener) that runs the stub scan,
-/// replay lookup (slice 6), and outbound forward in order. Tests can supply
-/// their own implementation to inspect chain composition in isolation.
+/// supplies a `LiveTerminal` in `listener.rs` that runs the stub scan,
+/// replay lookup, and outbound forward in order. Tests can supply their
+/// own implementation to inspect chain composition in isolation.
 pub trait Terminal: Send + Sync {
     fn invoke<'a>(&'a self, req: ProxyRequest, ctx: &'a mut RequestContext) -> TerminalFuture<'a>;
 }

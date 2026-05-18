@@ -1,5 +1,5 @@
-//! Integration tests for slice 5 — stubs, pause/resume, and the in-process
-//! command plane driving the live listener.
+//! Stubs, pause/resume, and the in-process command plane driving the
+//! live listener.
 
 use std::net::SocketAddr;
 use std::time::Duration;

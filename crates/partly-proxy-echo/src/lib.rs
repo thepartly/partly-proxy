@@ -10,9 +10,9 @@
 //! - `GET /_kill` — drops the connection without sending a response (useful
 //!   for upstream-error path tests).
 //!
-//! Used by the proxy library's integration tests and by the Docker test
-//! harness in slice 12. Lives in its own crate so other workspace crates and
-//! external tools can depend on it without pulling in the proxy library.
+//! Used by the proxy library's integration tests. Lives in its own
+//! crate so other workspace crates and external tools can depend on it
+//! without pulling in the proxy library.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;

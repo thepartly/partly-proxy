@@ -42,15 +42,14 @@ pub enum Command {
     /// Drop every exchange held in memory.
     ClearRecordings,
     /// Block until the filter matches at least one exchange or `timeout`
-    /// elapses. Slice 8 wires the wait-for behaviour; slice 5 returns an
-    /// immediate evaluation.
+    /// elapses. See `SPECIFICATION.md` §14.1 for the wait-for semantics.
     AssertSeen {
         filter: TrafficFilter,
         timeout: Duration,
     },
     /// Block until the filter matches exactly `expected` exchanges, the
-    /// match count overshoots, or `timeout` elapses. Slice 8 wires the
-    /// wait-for behaviour; slice 5 returns an immediate evaluation.
+    /// match count overshoots, or `timeout` elapses. See `SPECIFICATION.md`
+    /// §14.1 for the wait-for semantics; overshoot terminates fast.
     AssertCount {
         filter: TrafficFilter,
         expected: usize,

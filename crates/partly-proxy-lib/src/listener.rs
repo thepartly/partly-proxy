@@ -1,14 +1,10 @@
 //! Inbound TCP accept loop and per-request service handler.
 //!
-//! Lifecycle stages from `SPECIFICATION.md` §5 wired up so far:
-//!   - 3: pause gate (slice 5)
-//!   - 4: body collection
-//!   - 5: middleware chain (slice 4)
-//!   - 6: stub scan terminal (slice 5)
-//!   - 8: forward to upstream
-//!   - 9: record (with snapshot-boundary redaction)
-//!
-//! Stages 1 (TLS) and 7 (replay terminal) land in later slices.
+//! Implements the request lifecycle from `SPECIFICATION.md` §5: TLS
+//! handshake (when `inbound_tls` is configured) → HTTP/1.1 or HTTP/2
+//! negotiation → pause gate → body collection → middleware chain →
+//! terminal (stub scan, then replay lookup, then forward) → record
+//! (with snapshot-boundary redaction).
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -269,8 +265,8 @@ async fn pause_gate(runtime: &UpstreamRuntime) {
     }
 }
 
-/// Concrete terminal that drives the stub scan and outbound forward. Replay
-/// (slice 6) will plug in between the stub scan and the forward.
+/// Concrete terminal that drives the stub scan, replay lookup, and
+/// outbound forward in spec order.
 struct LiveTerminal<'a> {
     runtime: &'a UpstreamRuntime,
 }

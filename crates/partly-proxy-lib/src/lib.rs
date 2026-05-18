@@ -1,11 +1,6 @@
 //! `partly-proxy-lib` — programmable HTTP/HTTPS proxy for integration testing.
 //!
 //! See `SPECIFICATION.md` in the workspace root for the full design.
-//!
-//! This is slice 1 of an incremental rollout: only the configuration types,
-//! the error model, and a non-functional builder/cluster skeleton are present.
-//! Networking, middleware, recording, replay, and the control plane land in
-//! later slices.
 
 #![deny(rust_2018_idioms)]
 #![warn(missing_debug_implementations)]
@@ -47,6 +42,7 @@ pub use recorder::Recorder;
 pub use replay::{MatchStrategy, ReplaySource};
 pub use storage::{SharedStorage, SnapshotStorage};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
+pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};
 
 /// Re-export of the JSON-Lines snapshot backend, available when the
 /// `storage-jsonl` feature is on (which it is by default).
@@ -62,4 +58,3 @@ pub use partly_proxy_storage_sqlite as sqlite;
 /// available when the `storage-object` feature is on.
 #[cfg(feature = "storage-object")]
 pub use partly_proxy_storage_object as object;
-pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};

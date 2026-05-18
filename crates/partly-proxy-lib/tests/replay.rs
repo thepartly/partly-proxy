@@ -1,5 +1,4 @@
-//! Integration tests for slice 6 — replay layered with middleware, stubs and
-//! the live forwarder.
+//! Replay layered with middleware, stubs and the live forwarder.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -115,21 +115,17 @@ Both scripts are the source of truth for what CI runs. The GitHub Actions
 workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) delegates
 to them.
 
-## Implementation status
+## Feature coverage
 
-Built incrementally as twelve slices, each commit producing a green tree
-(`cargo fmt --check`, `cargo clippy -D warnings`, full test suite passing):
-
-| Slice | Description |
-| ----- | ----------- |
-| 1     | Workspace + config + error model |
-| 2     | Plain HTTP listener + forwarder (hyper 1.x) |
-| 3     | Recorder (in-memory ring + NDJSON append) |
-| 4     | Middleware + `Next` + snapshot redaction hooks |
-| 5     | Stubs + in-process command plane |
-| 6     | Replay (MethodPathAndBodyHash + Custom closures) |
-| 7     | TCP JSON-Lines control plane |
-| 8     | Wait-for `AssertSeen` / `AssertCount` |
-| 9     | TLS (inbound + outbound, with custom CAs and dangerous-mode) |
-| 10    | Hosting example (`examples/host.rs`) |
-| 11    | TypeScript client + vitest |
+| Capability                                    | Notes                                              |
+| --------------------------------------------- | -------------------------------------------------- |
+| Plain HTTP listener + forwarder (hyper 1.x)   | HTTP/1.1 + HTTP/2 auto-negotiation                 |
+| Inbound + outbound TLS (rustls)               | Custom CAs and `accept_invalid_certs` for testing  |
+| Recorder + pluggable snapshot storage         | NDJSON / SQLite / S3-compatible object store       |
+| Replay (`MethodPathAndBodyHash` + `Custom`)   | O(1) indexed lookup; goes through redaction hooks  |
+| Middleware chain with `Next<'_>`              | Body rewrites, short-circuit, error recovery       |
+| Stubs + in-process command plane              | Fire-count, artificial delay, pause/resume         |
+| TCP JSON-Lines control plane                  | Same command set, cross-language harnesses         |
+| Wait-for `AssertSeen` / `AssertCount`         | Overshoot terminates fast                          |
+| Hosting example (`examples/host.rs`)          | Env-var-driven; ~30 lines                          |
+| TypeScript client + vitest                    | Mock + real-binary e2e suites                      |

@@ -1,4 +1,4 @@
-//! Integration tests for slice 9 — inbound and outbound TLS.
+//! Inbound and outbound TLS coverage.
 //!
 //! Test certs are generated on the fly with `rcgen` so the suite has no
 //! external file dependencies. Each test writes the PEMs to a `tempfile::tempdir`

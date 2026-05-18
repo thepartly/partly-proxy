@@ -1,9 +1,10 @@
 //! Round-trip tests for the NDJSON snapshot backend.
 //!
-//! These tests stand alone — they don't use the conformance suite (that
-//! ships in slice 5). They prove the basic write → reopen → read cycle
-//! and the durability behaviour the JSONL backend is contracted to
-//! provide.
+//! These tests stand alone — they don't use the shared
+//! `partly_proxy_types::testing::run_conformance` suite (that lives in
+//! `tests/conformance.rs`). They prove the basic write → reopen → read
+//! cycle plus the per-line durability behaviour the JSONL backend is
+//! contracted to provide.
 
 use std::sync::Arc;
 use std::time::Duration;

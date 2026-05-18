@@ -113,8 +113,10 @@ impl ClusterHandle {
     /// loop. Returns `Ok(())` once every accept loop task has joined.
     ///
     /// In-flight connections receive the same signal and are dropped on the
-    /// next yield point. There is no graceful drain — slice 16 (lifecycle)
-    /// will refine this if drain semantics are needed.
+    /// next yield point. There is no graceful drain; callers that need
+    /// drain semantics should issue a `Pause` command before shutting
+    /// down and await `AssertSeen`/`AssertCount` to confirm in-flight
+    /// work has settled.
     pub async fn shutdown(self) -> Result<()> {
         self.shutdown_with_timeout(Duration::from_secs(5)).await
     }

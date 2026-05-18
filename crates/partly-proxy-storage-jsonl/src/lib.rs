@@ -1,16 +1,16 @@
 //! NDJSON [`SnapshotStorage`] backend.
 //!
 //! One file, one exchange per line. Bodies serialise as base64 via the
-//! `recorded` module's serde plumbing, so the on-disk format is identical
-//! to what today's `RecordingConfig::persisted` produces.
+//! `recorded` module's serde plumbing, so the on-disk format matches
+//! what `RecordingConfig::persisted` produces when the lib's
+//! `storage-jsonl` feature is on.
 //!
 //! Durability model:
 //!
 //! - [`JsonlStorage::append`] writes the line and calls `BufWriter::flush`
 //!   before returning. The bytes are in the OS write cache; a `tail -f`
 //!   on the file sees them immediately and a process crash preserves
-//!   them. **This preserves the per-line durability guarantee today's
-//!   `Recorder` provides.**
+//!   them — per-line durability is part of the contract.
 //! - [`SnapshotStorage::flush`] additionally calls `File::sync_data` for
 //!   callers (typically `ClusterHandle::shutdown`) that want
 //!   committed-to-disk semantics.
@@ -41,9 +41,10 @@ pub struct JsonlStorage {
 }
 
 impl JsonlStorage {
-    /// Open `path` in append mode, creating it if missing. Mirrors the
-    /// `OpenOptions::new().append(true).create(true)` invocation that
-    /// today's `Recorder::new` uses internally.
+    /// Open `path` in append mode, creating it if missing. Uses the same
+    /// `OpenOptions::new().append(true).create(true)` invocation
+    /// `Recorder::new` uses when it auto-builds a `JsonlStorage` from
+    /// `RecordingConfig::persist_path`.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         let file = OpenOptions::new()

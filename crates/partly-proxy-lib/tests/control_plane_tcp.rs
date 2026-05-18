@@ -1,4 +1,4 @@
-//! Integration tests for slice 7 — the JSON-Lines TCP control plane.
+//! End-to-end coverage of the JSON-Lines TCP control plane.
 
 use std::net::SocketAddr;
 use std::time::Duration;
