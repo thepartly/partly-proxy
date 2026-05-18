@@ -8,8 +8,20 @@
 
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
+#[cfg(feature = "_otel_any")]
+use std::sync::Arc;
+
+#[cfg(feature = "_otel_any")]
+use http::{Method, Uri};
+
+/// Filter applied to incoming requests to decide whether to create an OTEL
+/// server span. Returns `true` to trace, `false` to skip. Useful for
+/// excluding health probes.
+#[cfg(feature = "_otel_any")]
+pub type OtelRequestFilter = Arc<dyn Fn(&Method, &Uri) -> bool + Send + Sync>;
+
 /// One listener bound to one upstream — see `SPECIFICATION.md` §3.1.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyConfig {
     /// Address the listener binds to.
     pub bind_addr: SocketAddr,
@@ -17,6 +29,38 @@ pub struct ProxyConfig {
     pub upstream: UpstreamTarget,
     /// If set, the listener terminates inbound TLS.
     pub inbound_tls: Option<InboundTlsConfig>,
+    /// When `true` (default), each inbound request creates an OTEL server
+    /// span parented to any `traceparent`/`tracestate` it carried, and the
+    /// proxy injects the resulting context into the response headers.
+    /// Set to `false` to bypass OTEL entirely for this listener.
+    #[cfg(feature = "_otel_any")]
+    pub otel_extract: bool,
+    /// When `Some`, called per request to decide whether to create a span
+    /// (return `true` to trace, `false` to skip). Applied after
+    /// `otel_extract`. Default: `None` (trace every request).
+    #[cfg(feature = "_otel_any")]
+    pub otel_filter: Option<OtelRequestFilter>,
+    /// When `true`, the current span's context is injected into outbound
+    /// request headers before forwarding to the upstream. Default `false`:
+    /// the proxy does not modify outbound headers for tracing unless asked.
+    #[cfg(feature = "_otel_any")]
+    pub otel_propagate_upstream: bool,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("ProxyConfig");
+        d.field("bind_addr", &self.bind_addr)
+            .field("upstream", &self.upstream)
+            .field("inbound_tls", &self.inbound_tls);
+        #[cfg(feature = "_otel_any")]
+        {
+            d.field("otel_extract", &self.otel_extract)
+                .field("otel_filter", &self.otel_filter.as_ref().map(|_| "<fn>"))
+                .field("otel_propagate_upstream", &self.otel_propagate_upstream);
+        }
+        d.finish()
+    }
 }
 
 impl ProxyConfig {
@@ -26,7 +70,41 @@ impl ProxyConfig {
             bind_addr,
             upstream,
             inbound_tls: None,
+            #[cfg(feature = "_otel_any")]
+            otel_extract: true,
+            #[cfg(feature = "_otel_any")]
+            otel_filter: None,
+            #[cfg(feature = "_otel_any")]
+            otel_propagate_upstream: false,
         }
+    }
+
+    /// Disable OTEL extraction (and the implicit response-header injection)
+    /// for this listener. No effect when no `otel_0_*` feature is enabled.
+    #[cfg(feature = "_otel_any")]
+    pub fn without_otel_extraction(mut self) -> Self {
+        self.otel_extract = false;
+        self
+    }
+
+    /// Install a request-level filter; returning `false` skips tracing for
+    /// that request. No effect when no `otel_0_*` feature is enabled.
+    #[cfg(feature = "_otel_any")]
+    pub fn with_otel_filter<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&Method, &Uri) -> bool + Send + Sync + 'static,
+    {
+        self.otel_filter = Some(Arc::new(f));
+        self
+    }
+
+    /// Enable injection of the current trace context into outbound requests
+    /// forwarded to the upstream. No effect when no `otel_0_*` feature is
+    /// enabled.
+    #[cfg(feature = "_otel_any")]
+    pub fn with_otel_propagation_to_upstream(mut self) -> Self {
+        self.otel_propagate_upstream = true;
+        self
     }
 }
 
