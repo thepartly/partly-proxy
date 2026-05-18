@@ -57,4 +57,9 @@ tempfile = { workspace = true }
 reqwest = { workspace = true }
 bytes = { workspace = true }
 rcgen = { workspace = true }
+tracing-subscriber = { workspace = true }
 partly-proxy-echo = { path = "../partly-proxy-echo" }
+
+[[example]]
+name = "host"
+path = "examples/host.rs"

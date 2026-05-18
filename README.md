@@ -15,8 +15,8 @@ The full design is in [`SPECIFICATION.md`](SPECIFICATION.md).
 api-proxy/
 ├── crates/
 │   ├── partly-proxy-lib/       # the library (crates.io target)
-│   ├── partly-proxy-runner/    # minimal env-var-driven hosting binary
-│   └── partly-proxy-echo/      # deterministic test upstream
+│   │   └── examples/host.rs    # minimal env-var-driven hosting binary
+│   └── partly-proxy-echo/      # deterministic test upstream (used by lib tests)
 ├── ts-client/                  # TypeScript client (@partly/proxy-client, npm target)
 ├── scripts/
 │   ├── test-unit.sh            # fmt + clippy + cargo test
@@ -131,5 +131,5 @@ Built incrementally as twelve slices, each commit producing a green tree
 | 7     | TCP JSON-Lines control plane |
 | 8     | Wait-for `AssertSeen` / `AssertCount` |
 | 9     | TLS (inbound + outbound, with custom CAs and dangerous-mode) |
-| 10    | Runner binary (minimal env-var wired hosting binary) |
+| 10    | Hosting example (`examples/host.rs`) |
 | 11    | TypeScript client + vitest |

@@ -610,15 +610,9 @@ A type alias `Result<T> = std::result::Result<T, ProxyError>` is provided.
 
 ---
 
-## 18. Runner Binary
+## 18. Hosting
 
-A companion binary (separate crate) wires the library to:
-
-- A hard-coded upstream and a fixed listener address.
-- Tracing initialised through the standard `RUST_LOG` mechanism.
-- Graceful shutdown on `Ctrl+C` via `ClusterHandle::shutdown()`.
-
-The binary is intentionally minimal — production deployments are expected to replace it with their own wiring, including any health / readiness probes their infrastructure requires.
+The crate does not ship a hosting binary — wiring `ProxyClusterBuilder` into a `tokio::main` and waiting on `Ctrl+C` is ~30 lines that every deployment customises anyway (config-file parsing, health probes, metrics, structured logging). A worked example lives at `crates/partly-proxy-lib/examples/host.rs` and can be run via `cargo run --example host -p partly-proxy-lib`.
 
 ---
 
