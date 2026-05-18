@@ -14,14 +14,25 @@
 //! that header stripped.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 use std::sync::Arc;
 
-use crate::error::{ProxyError, Result};
+// Only `from_jsonl` uses these — gate them so `--no-default-features`
+// builds don't trip an unused-import warning.
+#[cfg(feature = "storage-jsonl")]
+use std::io::{BufRead, BufReader};
+#[cfg(feature = "storage-jsonl")]
+use std::path::Path;
+
+use crate::error::Result;
+// `ProxyError` is only constructed by the JSONL loader path (and the
+// from_storage tests). Gate the import accordingly to keep
+// --no-default-features warning-free.
+#[cfg(any(test, feature = "storage-jsonl"))]
+use crate::error::ProxyError;
 use crate::middleware::{self, SharedMiddleware};
 use crate::proxy_io::{ProxyRequest, ProxyResponse};
 use crate::recorded::{sha256_hex, ExchangeOutcome, RecordedExchange, RecordedRequest};
+use crate::storage::SnapshotStorage;
 
 /// Predicate type used by [`MatchStrategy::Custom`]. Defined as a type alias
 /// so the trait-object type doesn't trip clippy's `type_complexity` lint.
@@ -95,6 +106,11 @@ impl ReplaySource {
     /// The loader reads one exchange per line and never materialises the
     /// whole file as a single string (per §8.1.1's 100k-exchange scale
     /// target). Each malformed line yields a `ProxyError::Recording`.
+    ///
+    /// Gated on the `storage-jsonl` Cargo feature (on by default). When the
+    /// feature is off, callers should use [`ReplaySource::from_storage`]
+    /// with whichever backend they prefer.
+    #[cfg(feature = "storage-jsonl")]
     pub fn from_jsonl(path: impl AsRef<Path>, strategy: MatchStrategy) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(ProxyError::Recording)?;
         let reader = BufReader::new(file);
@@ -104,10 +120,31 @@ impl ReplaySource {
             if line.trim().is_empty() {
                 continue;
             }
-            let exchange: RecordedExchange = serde_json::from_str(&line).map_err(|e| {
-                ProxyError::Recording(std::io::Error::other(format!("line {}: {e}", lineno + 1)))
-            })?;
+            // Single source of truth for the parse: the JSONL backend
+            // crate exports the same helper its own `load()` uses. No
+            // inline copy in this file.
+            let exchange = partly_proxy_storage_jsonl::parse_ndjson_line(&line, lineno)?;
             exchanges.push(exchange);
+        }
+        Ok(Self::new(exchanges, strategy))
+    }
+
+    /// Drain a `SnapshotStorage`'s `load()` stream into a replay source.
+    ///
+    /// The async counterpart to [`from_jsonl`](Self::from_jsonl), generic
+    /// over any storage backend. Peak memory during construction is
+    /// bounded by the largest single exchange — the stream is consumed
+    /// one item at a time, then the assembled `Vec` feeds the existing
+    /// `build_index` for O(1) `MethodPathAndBodyHash` lookups.
+    pub async fn from_storage(
+        storage: &dyn SnapshotStorage,
+        strategy: MatchStrategy,
+    ) -> Result<Self> {
+        use futures::StreamExt;
+        let mut stream = storage.load();
+        let mut exchanges = Vec::new();
+        while let Some(item) = stream.next().await {
+            exchanges.push(item?);
         }
         Ok(Self::new(exchanges, strategy))
     }
@@ -344,6 +381,7 @@ mod tests {
         assert_eq!(resp.status, StatusCode::CREATED);
     }
 
+    #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
     async fn from_jsonl_round_trips() {
         // Build a recorder with persist enabled, drive some exchanges
@@ -383,5 +421,71 @@ mod tests {
         assert_eq!(src.len(), 3);
         let resp = src.lookup(&live(Method::GET, "/n/1", b""), &[]).unwrap();
         assert_eq!(resp.body, Bytes::from_static(b"body-1"));
+    }
+
+    /// Mock `SnapshotStorage` that replays a pre-baked exchange list.
+    /// Used to validate `ReplaySource::from_storage` in isolation from any
+    /// concrete backend.
+    #[derive(Debug)]
+    struct MockStorage {
+        exchanges: Vec<RecordedExchange>,
+    }
+
+    #[async_trait::async_trait]
+    impl SnapshotStorage for MockStorage {
+        async fn append(&self, _exchange: &RecordedExchange) -> Result<()> {
+            Ok(())
+        }
+        async fn flush(&self) -> Result<()> {
+            Ok(())
+        }
+        fn load(&self) -> futures::stream::BoxStream<'_, Result<RecordedExchange>> {
+            let items: Vec<Result<RecordedExchange>> =
+                self.exchanges.iter().cloned().map(Ok).collect();
+            Box::pin(futures::stream::iter(items))
+        }
+    }
+
+    #[tokio::test]
+    async fn from_storage_drains_load_into_replay_source() {
+        let exchanges = vec![
+            make_exchange(Method::GET, "/a", b"", 200),
+            make_exchange(Method::POST, "/b", b"{\"n\":1}", 201),
+        ];
+        let storage = MockStorage {
+            exchanges: exchanges.clone(),
+        };
+        let src = ReplaySource::from_storage(&storage, MatchStrategy::MethodPathAndBodyHash)
+            .await
+            .unwrap();
+        assert_eq!(src.len(), 2);
+        let resp = src
+            .lookup(&live(Method::POST, "/b", b"{\"n\":1}"), &[])
+            .unwrap();
+        assert_eq!(resp.status, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn from_storage_propagates_load_error() {
+        #[derive(Debug)]
+        struct BadStorage;
+        #[async_trait::async_trait]
+        impl SnapshotStorage for BadStorage {
+            async fn append(&self, _: &RecordedExchange) -> Result<()> {
+                Ok(())
+            }
+            async fn flush(&self) -> Result<()> {
+                Ok(())
+            }
+            fn load(&self) -> futures::stream::BoxStream<'_, Result<RecordedExchange>> {
+                Box::pin(futures::stream::iter([Err(ProxyError::Recording(
+                    std::io::Error::other("synthetic"),
+                ))]))
+            }
+        }
+        let err = ReplaySource::from_storage(&BadStorage, MatchStrategy::MethodPathAndBodyHash)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProxyError::Recording(_)));
     }
 }
