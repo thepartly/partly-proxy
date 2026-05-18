@@ -16,6 +16,7 @@ pub mod cluster;
 pub mod command;
 pub mod config;
 pub mod context;
+mod control_plane;
 pub mod error;
 mod forwarder;
 mod listener;
@@ -26,6 +27,7 @@ pub mod recorder;
 pub mod replay;
 pub mod stub;
 mod upstream;
+pub mod wire;
 
 pub use assertions::TrafficFilter;
 pub use builder::ProxyClusterBuilder;
@@ -42,3 +44,4 @@ pub use recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedR
 pub use recorder::Recorder;
 pub use replay::{MatchStrategy, ReplaySource};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
+pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};

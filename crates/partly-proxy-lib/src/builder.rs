@@ -8,6 +8,7 @@
 //! deterministic.
 
 use std::collections::{BTreeMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::sync::watch;
@@ -15,6 +16,7 @@ use tokio::sync::watch;
 use crate::cluster::{ClusterHandle, RunningUpstream};
 use crate::command;
 use crate::config::{ProxyConfig, RecordingConfig};
+use crate::control_plane;
 use crate::error::{ProxyError, Result};
 use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
@@ -28,6 +30,7 @@ pub struct ProxyClusterBuilder {
     recording: RecordingConfig,
     upstreams: Vec<UpstreamSpec>,
     global_middleware: Vec<SharedMiddleware>,
+    tcp_control_addr: Option<SocketAddr>,
 }
 
 impl std::fmt::Debug for ProxyClusterBuilder {
@@ -39,6 +42,7 @@ impl std::fmt::Debug for ProxyClusterBuilder {
                 &self.upstreams.iter().map(|u| &u.name).collect::<Vec<_>>(),
             )
             .field("global_middleware", &self.global_middleware.len())
+            .field("tcp_control_addr", &self.tcp_control_addr)
             .finish()
     }
 }
@@ -158,6 +162,13 @@ impl ProxyClusterBuilder {
         self.global_middleware.len()
     }
 
+    /// Enable the TCP JSON-Lines control plane on `addr`. See
+    /// `SPECIFICATION.md` §12.2.
+    pub fn tcp_control_plane(mut self, addr: SocketAddr) -> Self {
+        self.tcp_control_addr = Some(addr);
+        self
+    }
+
     /// Bind every listener and start its accept loop.
     ///
     /// Returns a [`ClusterHandle`](crate::ClusterHandle) once all listeners
@@ -215,7 +226,25 @@ impl ProxyClusterBuilder {
 
         let registry = Arc::new(registry);
         let (command_sender, command_task) =
-            command::spawn_processor(registry, recorder.clone(), shutdown_rx);
+            command::spawn_processor(registry, recorder.clone(), shutdown_rx.clone());
+
+        let tcp_control = if let Some(addr) = self.tcp_control_addr {
+            match control_plane::spawn_tcp_control_plane(addr, command_sender.clone(), shutdown_rx)
+                .await
+            {
+                Ok(rc) => Some(rc),
+                Err(e) => {
+                    let _ = shutdown_tx.send(true);
+                    for (_, up) in upstreams {
+                        let _ = up.task.await;
+                    }
+                    let _ = command_task.await;
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(ClusterHandle::new(
             upstreams,
@@ -224,6 +253,7 @@ impl ProxyClusterBuilder {
             recorder,
             command_sender,
             command_task,
+            tcp_control,
         ))
     }
 }

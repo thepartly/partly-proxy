@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 
 use crate::command::CommandSender;
 use crate::config::RecordingConfig;
+use crate::control_plane::RunningControlPlane;
 use crate::error::{ProxyError, Result};
 use crate::recorder::Recorder;
 
@@ -34,6 +35,7 @@ pub struct ClusterHandle {
     recorder: Recorder,
     command_sender: CommandSender,
     command_task: Option<JoinHandle<()>>,
+    tcp_control: Option<RunningControlPlane>,
 }
 
 impl std::fmt::Debug for ClusterHandle {
@@ -60,6 +62,7 @@ impl ClusterHandle {
         recorder: Recorder,
         command_sender: CommandSender,
         command_task: JoinHandle<()>,
+        tcp_control: Option<RunningControlPlane>,
     ) -> Self {
         Self {
             upstreams,
@@ -68,7 +71,14 @@ impl ClusterHandle {
             recorder,
             command_sender,
             command_task: Some(command_task),
+            tcp_control,
         }
+    }
+
+    /// Bound address of the TCP JSON-Lines control plane, if it was enabled
+    /// via [`ProxyClusterBuilder::tcp_control_plane`].
+    pub fn tcp_control_addr(&self) -> Option<SocketAddr> {
+        self.tcp_control.as_ref().map(|c| c.bound_addr)
     }
 
     /// Bound address for a named upstream, or `None` if unknown.
@@ -138,6 +148,17 @@ impl ClusterHandle {
                 }
             }
         }
+        if let Some(rc) = self.tcp_control.take() {
+            match tokio::time::timeout(timeout, rc.task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(join_err)) => {
+                    errors.push(format!("TCP control plane panic: {join_err}"));
+                }
+                Err(_) => {
+                    errors.push(format!("TCP control plane did not exit within {timeout:?}"));
+                }
+            }
+        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -164,6 +185,7 @@ mod tests {
             recorder,
             sender,
             task,
+            None,
         )
     }
 
