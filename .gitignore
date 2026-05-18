@@ -1,0 +1,24 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Test artifacts
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+
+# TypeScript client
+ts-client/node_modules/
+ts-client/dist/
+ts-client/coverage/
+ts-client/*.tsbuildinfo
+
+# Local notes / scratch
+/.scratch/
