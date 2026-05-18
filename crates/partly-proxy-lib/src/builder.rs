@@ -22,6 +22,7 @@ use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
 use crate::recorder::Recorder;
 use crate::replay::ReplaySource;
+use crate::storage::SharedStorage;
 use crate::upstream::UpstreamRegistry;
 
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).
@@ -31,6 +32,7 @@ pub struct ProxyClusterBuilder {
     upstreams: Vec<UpstreamSpec>,
     global_middleware: Vec<SharedMiddleware>,
     tcp_control_addr: Option<SocketAddr>,
+    storage: Option<SharedStorage>,
 }
 
 impl std::fmt::Debug for ProxyClusterBuilder {
@@ -43,6 +45,7 @@ impl std::fmt::Debug for ProxyClusterBuilder {
             )
             .field("global_middleware", &self.global_middleware.len())
             .field("tcp_control_addr", &self.tcp_control_addr)
+            .field("storage", &self.storage.is_some())
             .finish()
     }
 }
@@ -169,6 +172,19 @@ impl ProxyClusterBuilder {
         self
     }
 
+    /// Override the recorder's storage backend.
+    ///
+    /// When set, `run()` builds the recorder via
+    /// [`Recorder::with_storage`](crate::Recorder::with_storage) and the
+    /// provided `SharedStorage` is used for every recorded exchange. When
+    /// unset, the recorder falls back to opening the default backend from
+    /// `RecordingConfig::persist_path` (NDJSON when the `storage-jsonl`
+    /// feature is on, in-memory only otherwise).
+    pub fn storage(mut self, storage: SharedStorage) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
     /// Bind every listener and start its accept loop.
     ///
     /// Returns a [`ClusterHandle`](crate::ClusterHandle) once all listeners
@@ -186,7 +202,10 @@ impl ProxyClusterBuilder {
             }
         }
 
-        let recorder = Recorder::new(self.recording.clone()).await?;
+        let recorder = match self.storage.clone() {
+            Some(storage) => Recorder::with_storage(self.recording.clone(), Some(storage)),
+            None => Recorder::new(self.recording.clone()).await?,
+        };
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut upstreams = BTreeMap::new();
         let mut registry = UpstreamRegistry::default();

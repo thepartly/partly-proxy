@@ -124,6 +124,9 @@ impl ClusterHandle {
     pub async fn shutdown_with_timeout(mut self, timeout: Duration) -> Result<()> {
         let _ = self.shutdown_tx.send(true);
         let mut errors = Vec::new();
+        // Drain listener tasks first so any in-flight requests reach the
+        // recorder before we fence the storage. Order: shutdown signal →
+        // listener join → recorder flush → command/control task join.
         for (name, up) in self.upstreams {
             match tokio::time::timeout(timeout, up.task).await {
                 Ok(Ok(())) => {}
@@ -136,6 +139,14 @@ impl ClusterHandle {
                     ));
                 }
             }
+        }
+        // Fence the storage backend before joining the command task. For
+        // line-buffered backends (JSONL) this is an extra fsync; for
+        // batched backends (object store) it's when the part files +
+        // manifest are written. Errors are recorded but don't abort the
+        // rest of the shutdown.
+        if let Err(e) = self.recorder.flush().await {
+            errors.push(format!("recorder flush failed: {e}"));
         }
         if let Some(task) = self.command_task.take() {
             match tokio::time::timeout(timeout, task).await {

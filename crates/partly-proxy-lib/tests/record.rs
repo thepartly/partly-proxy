@@ -166,6 +166,93 @@ async fn ndjson_persist_file_is_replayable() {
     assert_eq!(parsed[0].request.body, bytes::Bytes::from_static(b"body-0"));
 }
 
+/// Storage backend that counts every `append` and `flush` it sees and
+/// keeps the exchanges in memory. Used to verify slice 4's
+/// `ProxyClusterBuilder::storage(...)` plumbing.
+#[derive(Debug, Default)]
+struct TrackingStorage {
+    appended: tokio::sync::Mutex<Vec<RecordedExchange>>,
+    append_count: std::sync::atomic::AtomicUsize,
+    flush_count: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl partly_proxy_lib::SnapshotStorage for TrackingStorage {
+    async fn append(&self, exchange: &RecordedExchange) -> partly_proxy_lib::Result<()> {
+        self.append_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.appended.lock().await.push(exchange.clone());
+        Ok(())
+    }
+
+    async fn flush(&self) -> partly_proxy_lib::Result<()> {
+        self.flush_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn load(&self) -> futures::stream::BoxStream<'_, partly_proxy_lib::Result<RecordedExchange>> {
+        let snapshot = self
+            .appended
+            .try_lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        Box::pin(futures::stream::iter(snapshot.into_iter().map(Ok)))
+    }
+}
+
+#[tokio::test]
+async fn custom_storage_via_builder_storage_setter() {
+    let (echo_addr, _t) = spawn_echo().await;
+    let storage = std::sync::Arc::new(TrackingStorage::default());
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{echo_addr}"))
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .storage(storage.clone())
+        .add_upstream("upstream", cfg)
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("upstream").unwrap();
+
+    for _ in 0..3 {
+        let _ = http_client()
+            .get(format!("http://{proxy}/x"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+    }
+    let _ = wait_for_exchanges(cluster.recorder(), 3).await;
+    cluster.shutdown().await.unwrap();
+
+    // Three appends through the trait, one flush from the shutdown fence.
+    assert_eq!(
+        storage
+            .append_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3
+    );
+    assert_eq!(
+        storage
+            .flush_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    let saved = storage.appended.lock().await.clone();
+    assert_eq!(saved.len(), 3);
+    for (i, ex) in saved.iter().enumerate() {
+        assert_eq!(ex.request.uri, "/x", "exchange {i}");
+    }
+}
+
 #[tokio::test]
 async fn disabled_recording_keeps_buffer_empty() {
     let (echo_addr, _echo_task) = spawn_echo().await;
