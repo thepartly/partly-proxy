@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[features]
+# Conformance suite for backend authors. Opt-in via dev-deps:
+#   partly-proxy-types = { path = "...", features = ["testing"] }
+testing = []
+
 [lints.rust]
 unsafe_code = "forbid"
 

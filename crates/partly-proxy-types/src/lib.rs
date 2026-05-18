@@ -14,6 +14,9 @@ pub mod error;
 pub mod recorded;
 pub mod storage;
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use error::{ProxyError, Result};
 pub use recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 pub use storage::{SharedStorage, SnapshotStorage};

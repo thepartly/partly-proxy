@@ -33,7 +33,7 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-partly-proxy-types = { path = "../partly-proxy-types" }
+partly-proxy-types = { path = "../partly-proxy-types", features = ["testing"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes = { workspace = true }
