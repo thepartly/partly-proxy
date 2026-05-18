@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use crate::forwarder::Forwarder;
 use crate::middleware::SharedMiddleware;
 use crate::recorder::Recorder;
+use crate::replay::ReplaySource;
 use crate::stub::StubStore;
 
 /// Per-upstream runtime state shared with every accepted connection and with
@@ -30,6 +31,8 @@ pub(crate) struct UpstreamRuntime {
     /// Pause flag — `true` while the upstream is paused. Use the `watch`
     /// sender to flip it; receivers awaiting `pause.changed()` will wake.
     pub pause: watch::Sender<bool>,
+    /// Optional replay source consulted between stub scan and forward.
+    pub replay: Option<ReplaySource>,
 }
 
 impl UpstreamRuntime {
@@ -39,6 +42,7 @@ impl UpstreamRuntime {
         forwarder: Forwarder,
         recorder: Recorder,
         middleware: Vec<SharedMiddleware>,
+        replay: Option<ReplaySource>,
     ) -> Self {
         let (pause, _rx) = watch::channel(false);
         Self {
@@ -48,6 +52,7 @@ impl UpstreamRuntime {
             middleware,
             stubs: StubStore::default(),
             pause,
+            replay,
         }
     }
 
@@ -65,7 +70,7 @@ impl UpstreamRuntime {
         let recorder = Recorder::new(RecordingConfig::disabled()).await.unwrap();
         let forwarder =
             Forwarder::new(UpstreamTarget::new("http://127.0.0.1:1")).expect("forwarder builds");
-        Self::new(name.to_owned(), forwarder, recorder, Vec::new())
+        Self::new(name.to_owned(), forwarder, recorder, Vec::new(), None)
     }
 }
 

@@ -23,6 +23,7 @@ pub mod middleware;
 pub mod proxy_io;
 pub mod recorded;
 pub mod recorder;
+pub mod replay;
 pub mod stub;
 mod upstream;
 
@@ -39,4 +40,5 @@ pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, Terminal
 pub use proxy_io::{ProxyRequest, ProxyResponse};
 pub use recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 pub use recorder::Recorder;
+pub use replay::{MatchStrategy, ReplaySource};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};

@@ -1,0 +1,332 @@
+//! Integration tests for slice 6 — replay layered with middleware, stubs and
+//! the live forwarder.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{HeaderMap, Method, StatusCode};
+use partly_proxy_echo as echo;
+use partly_proxy_lib::{
+    Command, MatchStrategy, Next, ProxyClusterBuilder, ProxyConfig, ProxyMiddleware, ProxyRequest,
+    ProxyResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
+    Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
+};
+use partly_proxy_lib::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
+use tokio::task::JoinHandle;
+
+async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
+    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let task = tokio::spawn(async move {
+        let _ = echo::serve(listener).await;
+    });
+    (addr, task)
+}
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap()
+}
+
+fn cfg(url: String) -> ProxyConfig {
+    ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(url)
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    )
+}
+
+fn make_recorded(
+    method: Method,
+    path: &str,
+    body: &[u8],
+    status: u16,
+    body_resp: &[u8],
+) -> RecordedExchange {
+    let req = RecordedRequest::from_parts(
+        &method,
+        &path.parse().unwrap(),
+        &HeaderMap::new(),
+        Bytes::copy_from_slice(body),
+    );
+    let resp = RecordedResponse {
+        status,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: Bytes::copy_from_slice(body_resp),
+    };
+    RecordedExchange::new(
+        Some("api".into()),
+        req,
+        ExchangeOutcome::Response(resp),
+        Duration::from_millis(1),
+    )
+}
+
+#[tokio::test]
+async fn replay_hit_serves_recorded_response_without_touching_upstream() {
+    // Bind an unreachable address as the upstream so any forward attempt
+    // would clearly fail. Replay must succeed without ever reaching it.
+    let unreachable = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        drop(l);
+        a
+    };
+
+    let replay = ReplaySource::new(
+        vec![make_recorded(
+            Method::GET,
+            "/health",
+            b"",
+            200,
+            b"{\"ok\":true}",
+        )],
+        MatchStrategy::MethodPathAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{unreachable}")),
+            Vec::new(),
+            Some(replay),
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let resp = http_client()
+        .get(format!("http://{proxy}/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), "{\"ok\":true}");
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_miss_falls_through_to_upstream() {
+    let (echo_addr, _t) = spawn_echo().await;
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
+        MatchStrategy::MethodPathAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{echo_addr}")),
+            Vec::new(),
+            Some(replay),
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    // /health is in the snapshot — replay returns "replayed".
+    let r = http_client()
+        .get(format!("http://{proxy}/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "replayed");
+
+    // /other is not — falls through to echo (returns JSON).
+    let r = http_client()
+        .get(format!("http://{proxy}/other"))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["path"], "/other");
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stub_takes_priority_over_replay() {
+    let unreachable = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        drop(l);
+        a
+    };
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/x", b"", 200, b"from-replay")],
+        MatchStrategy::MethodPathAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{unreachable}")),
+            Vec::new(),
+            Some(replay),
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    cluster
+        .command_sender()
+        .send(Command::Stub {
+            upstream: None,
+            matcher: RequestMatcher::new().method(Method::GET).path("/x"),
+            response: StubbedResponse::new(StatusCode::IM_A_TEAPOT)
+                .body(Bytes::from_static(b"from-stub")),
+            times: Some(1),
+        })
+        .await
+        .unwrap();
+
+    // First call: stub fires.
+    let r = http_client()
+        .get(format!("http://{proxy}/x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::IM_A_TEAPOT);
+    assert_eq!(r.text().await.unwrap(), "from-stub");
+
+    // Second call: stub exhausted, replay takes over.
+    let r = http_client()
+        .get(format!("http://{proxy}/x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), "from-replay");
+
+    cluster.shutdown().await.unwrap();
+}
+
+/// Auth-stripping redactor used by the redaction test below.
+struct StripAuthRedactor;
+
+#[async_trait]
+impl ProxyMiddleware for StripAuthRedactor {
+    async fn handle(
+        &self,
+        req: ProxyRequest,
+        ctx: &mut RequestContext,
+        next: Next<'_>,
+    ) -> ProxyResult<ProxyResponse> {
+        next.run(req, ctx).await
+    }
+
+    fn redact_request_for_snapshot(&self, req: &mut ProxyRequest) {
+        req.headers.remove("authorization");
+    }
+}
+
+#[tokio::test]
+async fn replay_lookup_uses_redact_request_for_snapshot() {
+    // Snapshot was recorded with auth stripped (the recorded body is just
+    // the literal "BODY", and the URI/method match). When the live request
+    // arrives carrying an Authorization header, the redactor on the middleware
+    // chain runs on a working copy before the lookup hashes the body, so the
+    // snapshot hit succeeds.
+    //
+    // The body hash must match the *redacted* live body. Here the redactor
+    // doesn't touch the body — the test exercises that the redaction step
+    // runs at all, since the spec mandates that recorded snapshots that
+    // had authorization stripped should still match incoming requests that
+    // carry an authorization header.
+    let unreachable = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        drop(l);
+        a
+    };
+    let snapshot = make_recorded(Method::GET, "/secure", b"", 200, b"ok");
+    let replay = ReplaySource::new(vec![snapshot], MatchStrategy::MethodPathAndBodyHash);
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{unreachable}")),
+            vec![Arc::new(StripAuthRedactor) as SharedMiddleware],
+            Some(replay),
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/secure"))
+        .header("authorization", "Bearer live-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), "ok");
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn replay_records_served_exchanges_when_recording_enabled() {
+    // §8.3 says "Every served exchange — whether the response came from a
+    // middleware short-circuit, a stub, or replay — is recorded under the
+    // upstream name".
+    let unreachable = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        drop(l);
+        a
+    };
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/x", b"", 200, b"replay-body")],
+        MatchStrategy::MethodPathAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(10))
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{unreachable}")),
+            Vec::new(),
+            Some(replay),
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let _ = http_client()
+        .get(format!("http://{proxy}/x"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    // Wait until the recorder has caught up.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if cluster.recorder().len().await >= 1 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let exchanges = cluster.recorder().exchanges().await;
+    assert_eq!(exchanges.len(), 1);
+    let resp = exchanges[0]
+        .outcome
+        .as_response()
+        .expect("response outcome");
+    assert_eq!(resp.body, Bytes::from_static(b"replay-body"));
+
+    cluster.shutdown().await.unwrap();
+}

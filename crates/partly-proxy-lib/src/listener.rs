@@ -63,7 +63,11 @@ pub(crate) async fn spawn_listener(
     middleware.extend(spec.middleware);
 
     let runtime = Arc::new(UpstreamRuntime::new(
-        spec.name, forwarder, recorder, middleware,
+        spec.name,
+        forwarder,
+        recorder,
+        middleware,
+        spec.replay,
     ));
 
     let task = tokio::spawn(accept_loop(listener, runtime.clone(), shutdown));
@@ -234,7 +238,13 @@ impl Terminal for LiveTerminal<'_> {
                 }
                 return Ok(response.into_proxy());
             }
-            // Lifecycle stage 7: replay lookup (slice 6).
+            // Lifecycle stage 7: replay lookup. The lookup applies
+            // `redact_request_for_snapshot` to a working copy before hashing.
+            if let Some(source) = &self.runtime.replay {
+                if let Some(resp) = source.lookup(&req, &self.runtime.middleware) {
+                    return Ok(resp);
+                }
+            }
             // Lifecycle stage 8: forward.
             self.runtime.forwarder.forward(req).await
         })

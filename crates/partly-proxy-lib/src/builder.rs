@@ -19,6 +19,7 @@ use crate::error::{ProxyError, Result};
 use crate::listener;
 use crate::middleware::{ProxyMiddleware, SharedMiddleware};
 use crate::recorder::Recorder;
+use crate::replay::ReplaySource;
 use crate::upstream::UpstreamRegistry;
 
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).
@@ -43,13 +44,11 @@ impl std::fmt::Debug for ProxyClusterBuilder {
 }
 
 /// One registered upstream and the configuration that describes it.
-///
-/// Kept public-in-crate so later slices can extend it (replay source, etc.)
-/// without rewriting the builder.
 pub(crate) struct UpstreamSpec {
     pub name: String,
     pub config: ProxyConfig,
     pub middleware: Vec<SharedMiddleware>,
+    pub replay: Option<ReplaySource>,
 }
 
 impl std::fmt::Debug for UpstreamSpec {
@@ -57,6 +56,7 @@ impl std::fmt::Debug for UpstreamSpec {
         f.debug_struct("UpstreamSpec")
             .field("name", &self.name)
             .field("middleware", &self.middleware.len())
+            .field("replay", &self.replay.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -80,6 +80,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware: Vec::new(),
+            replay: None,
         });
         self
     }
@@ -96,6 +97,29 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware,
+            replay: None,
+        });
+        self
+    }
+
+    /// Register an upstream with both per-upstream middleware and an
+    /// optional replay source — the most general per-upstream registration.
+    ///
+    /// See `SPECIFICATION.md` §8.3: replay is always layered with middleware
+    /// and stubs; stubs (registered later over the command plane) take
+    /// priority over replay, which takes priority over the upstream forward.
+    pub fn add_upstream_with(
+        mut self,
+        name: impl Into<String>,
+        config: ProxyConfig,
+        middleware: Vec<SharedMiddleware>,
+        replay: Option<ReplaySource>,
+    ) -> Self {
+        self.upstreams.push(UpstreamSpec {
+            name: name.into(),
+            config,
+            middleware,
+            replay,
         });
         self
     }
