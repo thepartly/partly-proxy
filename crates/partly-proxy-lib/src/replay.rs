@@ -27,8 +27,7 @@ use std::{collections::HashMap, sync::Arc};
 #[cfg(any(test, feature = "storage-jsonl"))]
 use partly_proxy_types::ProxyError;
 use partly_proxy_types::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage,
-    recorded::sha256_hex,
+    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage, hash::sha256_hex,
 };
 
 use crate::{

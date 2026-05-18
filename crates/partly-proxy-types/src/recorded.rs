@@ -6,8 +6,9 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use http::{HeaderMap, Method, Response, StatusCode, Uri};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+use crate::hash::sha256_hex;
 
 /// One recorded request.
 ///
@@ -18,7 +19,7 @@ pub struct RecordedRequest {
     pub method: String,
     pub uri: String,
     pub headers: Vec<(String, String)>,
-    #[serde(with = "base64_bytes")]
+    #[serde(with = "crate::encoding::base64_bytes")]
     pub body: Bytes,
     pub body_sha256: String,
 }
@@ -45,7 +46,7 @@ impl RecordedRequest {
 pub struct RecordedResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    #[serde(with = "base64_bytes")]
+    #[serde(with = "crate::encoding::base64_bytes")]
     pub body: Bytes,
 }
 
@@ -94,7 +95,7 @@ pub struct RecordedExchange {
     pub upstream: Option<String>,
     pub timestamp: DateTime<Utc>,
     /// Serialised as integer `duration_ms` for cross-language friendliness.
-    #[serde(rename = "duration_ms", with = "duration_ms")]
+    #[serde(rename = "duration_ms", with = "crate::encoding::duration_ms")]
     pub duration: Duration,
     pub request: RecordedRequest,
     pub outcome: ExchangeOutcome,
@@ -123,12 +124,6 @@ impl RecordedExchange {
     }
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    hex::encode(h.finalize())
-}
-
 fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
@@ -141,56 +136,11 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-mod base64_bytes {
-    use base64::Engine;
-    use bytes::Bytes;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(bytes: &Bytes, s: S) -> Result<S::Ok, S::Error> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        s.serialize_str(&encoded)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Bytes, D::Error> {
-        let s = String::deserialize(d)?;
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(s.as_bytes())
-            .map_err(serde::de::Error::custom)?;
-        Ok(Bytes::from(decoded))
-    }
-}
-
-mod duration_ms {
-    use std::time::Duration;
-
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        // Saturating cast: u64 millis tops out at ~584M years.
-        let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-        s.serialize_u64(ms)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        let ms = u64::deserialize(d)?;
-        Ok(Duration::from_millis(ms))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use http::header::HeaderValue;
 
     use super::*;
-
-    #[test]
-    fn sha256_hex_matches_known_value() {
-        // `echo -n hello | sha256sum`
-        assert_eq!(
-            sha256_hex(b"hello"),
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
-    }
 
     #[test]
     fn recorded_request_hashes_body_on_construct() {

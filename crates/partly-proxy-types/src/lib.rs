@@ -12,7 +12,9 @@
 //! See [`storage`] for the [`SnapshotStorage`] trait and an
 //! implementation walkthrough.
 
+pub mod encoding;
 pub mod error;
+pub mod hash;
 pub mod recorded;
 pub mod storage;
 
