@@ -6,37 +6,32 @@
 //! terminal (stub scan, then replay lookup, then forward) → record
 //! (with snapshot-boundary redaction).
 
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Instant};
 
 use bytes::Bytes;
-use http::header::CONTENT_TYPE;
-use http::{HeaderMap, Method, StatusCode, Uri, Version};
+use http::{HeaderMap, Method, StatusCode, Uri, Version, header::CONTENT_TYPE};
 use http_body_util::Full;
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Request, Response};
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto;
-use tokio::net::TcpListener;
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
-
+use hyper::{Request, Response, body::Incoming, service::service_fn};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto,
+};
 use partly_proxy_types::{
     ExchangeOutcome, ProxyError, RecordedExchange, RecordedRequest, RecordedResponse, Result,
 };
-
-use crate::builder::UpstreamSpec;
-use crate::context::RequestContext;
-use crate::forwarder::Forwarder;
-use crate::middleware::{self, SharedMiddleware, Terminal, TerminalFuture};
-use crate::proxy_io::{ProxyRequest, ProxyResponse};
-use crate::recorder::Recorder;
-use crate::tls::build_tls_acceptor;
-use crate::upstream::UpstreamRuntime;
+use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use tokio_rustls::TlsAcceptor;
+
+use crate::{
+    builder::UpstreamSpec,
+    context::RequestContext,
+    forwarder::Forwarder,
+    middleware::{self, SharedMiddleware, Terminal, TerminalFuture},
+    proxy_io::{ProxyRequest, ProxyResponse},
+    recorder::Recorder,
+    tls::build_tls_acceptor,
+    upstream::UpstreamRuntime,
+};
 
 /// One running listener — the bound address plus the task handle of the
 /// accept loop.

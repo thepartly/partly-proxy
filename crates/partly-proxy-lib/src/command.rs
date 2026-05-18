@@ -6,17 +6,20 @@
 //! `timeout` elapses (wait-for semantics, §14.1) — overshoot also
 //! terminates `AssertCount` early.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use tokio::sync::{mpsc, oneshot};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use partly_proxy_types::{ProxyError, RecordedExchange, Result};
+use tokio::sync::{mpsc, oneshot};
 
-use crate::assertions::TrafficFilter;
-use crate::recorder::Recorder;
-use crate::stub::{RequestMatcher, StubEntry, StubbedResponse};
-use crate::upstream::SharedUpstreamRegistry;
+use crate::{
+    assertions::TrafficFilter,
+    recorder::Recorder,
+    stub::{RequestMatcher, StubEntry, StubbedResponse},
+    upstream::SharedUpstreamRegistry,
+};
 
 /// One control-plane command.
 #[derive(Debug)]
@@ -386,12 +389,15 @@ fn resolve_upstream(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::RecordingConfig;
-    use crate::upstream::{UpstreamRegistry, UpstreamRuntime};
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode};
     use partly_proxy_types::{ExchangeOutcome, RecordedRequest, RecordedResponse};
+
+    use super::*;
+    use crate::{
+        config::RecordingConfig,
+        upstream::{UpstreamRegistry, UpstreamRuntime},
+    };
 
     fn fixture() -> (
         SharedUpstreamRegistry,

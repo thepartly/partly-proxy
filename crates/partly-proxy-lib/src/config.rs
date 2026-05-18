@@ -6,9 +6,7 @@
 //! point where each field is used (when the listener binds, when the outbound
 //! client is built, etc.).
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 /// One listener bound to one upstream — see `SPECIFICATION.md` §3.1.
 #[derive(Debug, Clone)]

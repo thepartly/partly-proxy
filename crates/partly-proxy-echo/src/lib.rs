@@ -14,17 +14,16 @@
 //! crate so other workspace crates and external tools can depend on it
 //! without pulling in the proxy library.
 
-use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::{convert::Infallible, net::SocketAddr};
 
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto;
+use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto,
+};
 use serde::Serialize;
 use tokio::net::TcpListener;
 

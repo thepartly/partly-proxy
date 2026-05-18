@@ -4,18 +4,15 @@
 //! the handle without calling `shutdown` leaves listeners running until the
 //! process exits.
 
-use std::collections::BTreeMap;
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use partly_proxy_types::{ProxyError, Result};
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::{sync::watch, task::JoinHandle};
 
-use crate::command::CommandSender;
-use crate::config::RecordingConfig;
-use crate::control_plane::RunningControlPlane;
-use crate::recorder::Recorder;
+use crate::{
+    command::CommandSender, config::RecordingConfig, control_plane::RunningControlPlane,
+    recorder::Recorder,
+};
 
 /// Per-upstream metadata tracked by the handle.
 pub(crate) struct RunningUpstream {
@@ -183,8 +180,7 @@ impl ClusterHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command;
-    use crate::upstream::UpstreamRegistry;
+    use crate::{command, upstream::UpstreamRegistry};
 
     fn empty() -> ClusterHandle {
         let (tx, rx) = watch::channel(false);

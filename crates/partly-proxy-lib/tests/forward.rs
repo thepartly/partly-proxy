@@ -6,8 +6,7 @@
 //! reqwest client. We never reach the public internet — the upstream is
 //! always in the same tokio runtime.
 
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{ClusterHandle, ProxyClusterBuilder, ProxyConfig, UpstreamTarget};

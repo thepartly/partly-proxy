@@ -1,8 +1,10 @@
 //! Wait-for semantics of `AssertSeen` and `AssertCount` (see
 //! `SPECIFICATION.md` §14.1).
 
-use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{

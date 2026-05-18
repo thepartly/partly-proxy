@@ -4,28 +4,24 @@
 //! external file dependencies. Each test writes the PEMs to a `tempfile::tempdir`
 //! and points the proxy / upstream at those paths.
 
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::Full;
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto;
+use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto,
+};
 use partly_proxy_lib::{
     InboundTlsConfig, ProxyClusterBuilder, ProxyConfig, UpstreamTarget, UpstreamTlsConfig,
 };
-use rustls::ServerConfig;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::{
+    ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+};
 use tempfile::TempDir;
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
+use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_rustls::TlsAcceptor;
 
 /// Materialised test certificates written to a tempdir.

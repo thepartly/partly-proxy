@@ -2,12 +2,13 @@
 //! `JsonlStorage`. The suite lives in `partly-proxy-types::testing` so
 //! every backend crate runs the same assertions on the same fixtures.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use partly_proxy_storage_jsonl::JsonlStorage;
-use partly_proxy_types::storage::SharedStorage;
-use partly_proxy_types::testing::run_conformance;
+use partly_proxy_types::{storage::SharedStorage, testing::run_conformance};
 
 #[tokio::test]
 async fn jsonl_conformance() {

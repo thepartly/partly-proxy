@@ -32,6 +32,14 @@ pub use config::{
 };
 pub use context::RequestContext;
 pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};
+/// Re-export of the JSON-Lines snapshot backend, available when the
+/// `storage-jsonl` feature is on (which it is by default).
+#[cfg(feature = "storage-jsonl")]
+pub use partly_proxy_storage_jsonl as jsonl;
+/// Re-export of the SQLite snapshot backend, available when the
+/// `storage-sqlite` feature is on.
+#[cfg(feature = "storage-sqlite")]
+pub use partly_proxy_storage_sqlite as sqlite;
 pub use partly_proxy_types::{
     ExchangeOutcome, ProxyError, RecordedExchange, RecordedRequest, RecordedResponse, Result,
     SharedStorage, SnapshotStorage,
@@ -41,13 +49,3 @@ pub use recorder::Recorder;
 pub use replay::{MatchStrategy, ReplaySource};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};
-
-/// Re-export of the JSON-Lines snapshot backend, available when the
-/// `storage-jsonl` feature is on (which it is by default).
-#[cfg(feature = "storage-jsonl")]
-pub use partly_proxy_storage_jsonl as jsonl;
-
-/// Re-export of the SQLite snapshot backend, available when the
-/// `storage-sqlite` feature is on.
-#[cfg(feature = "storage-sqlite")]
-pub use partly_proxy_storage_sqlite as sqlite;

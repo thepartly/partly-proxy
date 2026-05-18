@@ -5,13 +5,13 @@
 //! delay, decrements its fire count, and auto-removes the stub when the
 //! counter reaches zero. `times: None` means "unlimited".
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use http::header::{HeaderName, HeaderValue};
-use http::{HeaderMap, Method, StatusCode, Version};
+use http::{
+    HeaderMap, Method, StatusCode, Version,
+    header::{HeaderName, HeaderValue},
+};
 use regex::Regex;
 use tokio::sync::RwLock;
 
@@ -238,8 +238,9 @@ impl StubStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
+
+    use super::*;
 
     fn req(path: &str) -> ProxyRequest {
         ProxyRequest::new(

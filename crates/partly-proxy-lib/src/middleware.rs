@@ -5,15 +5,15 @@
 //! middleware (in the order passed to `add_upstream_with_middleware`), then
 //! the terminal stages (stub scan → replay lookup → outbound forward).
 
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
-
 use partly_proxy_types::Result;
 
-use crate::context::RequestContext;
-use crate::proxy_io::{ProxyRequest, ProxyResponse};
+use crate::{
+    context::RequestContext,
+    proxy_io::{ProxyRequest, ProxyResponse},
+};
 
 /// Object-safe middleware trait. Implementors live behind
 /// `Arc<dyn ProxyMiddleware>`. The two `redact_*_for_snapshot` hooks are
@@ -122,10 +122,11 @@ pub(crate) async fn run_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode, Uri};
     use partly_proxy_types::ProxyError;
+
+    use super::*;
 
     /// Test terminal: returns a fixed 404 with the request body echoed.
     struct FakeTerminal;

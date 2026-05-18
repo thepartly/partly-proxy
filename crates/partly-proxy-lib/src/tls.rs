@@ -5,16 +5,17 @@
 //! the first time TLS configuration is constructed, so callers don't need to
 //! arrange a one-shot at startup.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::server::ServerConfig;
-use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore};
+use partly_proxy_types::{ProxyError, Result};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore,
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
+    server::ServerConfig,
+};
 use tokio_rustls::TlsAcceptor;
 
 use crate::config::{InboundTlsConfig, UpstreamTlsConfig};
-use partly_proxy_types::{ProxyError, Result};
 
 /// Idempotently install the `ring` crypto provider as the rustls default.
 /// rustls 0.23 requires an explicit provider before any config is built; if

@@ -8,15 +8,18 @@
 
 use std::net::SocketAddr;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
-
 use partly_proxy_types::{ProxyError, Result};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::watch,
+    task::JoinHandle,
+};
 
-use crate::command::CommandSender;
-use crate::wire::{WireCommand, WireResponse};
+use crate::{
+    command::CommandSender,
+    wire::{WireCommand, WireResponse},
+};
 
 /// Result of [`spawn_tcp_control_plane`].
 pub(crate) struct RunningControlPlane {

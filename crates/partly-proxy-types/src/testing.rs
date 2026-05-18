@@ -6,17 +6,17 @@
 //! `SharedStorage` per sub-case, and gets a battery of assertions
 //! covering the durability/ordering contract the trait promises.
 
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::time::Duration;
+use std::{collections::BTreeMap, future::Future, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, Method};
 
-use crate::error::Result;
-use crate::recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
-use crate::storage::SharedStorage;
+use crate::{
+    error::Result,
+    recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse},
+    storage::SharedStorage,
+};
 
 /// Run the full battery against any [`SharedStorage`] factory.
 ///

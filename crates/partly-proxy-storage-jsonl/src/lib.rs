@@ -24,12 +24,16 @@ use std::path::{Path, PathBuf};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use partly_proxy_types::error::{ProxyError, Result};
-use partly_proxy_types::recorded::RecordedExchange;
-use partly_proxy_types::storage::SnapshotStorage;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::sync::Mutex;
+use partly_proxy_types::{
+    error::{ProxyError, Result},
+    recorded::RecordedExchange,
+    storage::SnapshotStorage,
+};
+use tokio::{
+    fs::{File, OpenOptions},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
+    sync::Mutex,
+};
 
 /// NDJSON-backed [`SnapshotStorage`]. Cheap to wrap in `Arc` and share.
 #[derive(Debug)]

@@ -19,8 +19,7 @@
 //! is to show how short that binary is when it doesn't have to do those
 //! things.
 
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use partly_proxy_lib::{
     ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, UpstreamTarget,

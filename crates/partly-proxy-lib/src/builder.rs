@@ -7,22 +7,25 @@
 //! time — this makes the builder side-effect-free and the validation
 //! deterministic.
 
-use std::collections::{BTreeMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+};
 
 use partly_proxy_types::{ProxyError, Result, SharedStorage};
 use tokio::sync::watch;
 
-use crate::cluster::{ClusterHandle, RunningUpstream};
-use crate::command;
-use crate::config::{ProxyConfig, RecordingConfig};
-use crate::control_plane;
-use crate::listener;
-use crate::middleware::{ProxyMiddleware, SharedMiddleware};
-use crate::recorder::Recorder;
-use crate::replay::ReplaySource;
-use crate::upstream::UpstreamRegistry;
+use crate::{
+    cluster::{ClusterHandle, RunningUpstream},
+    command,
+    config::{ProxyConfig, RecordingConfig},
+    control_plane, listener,
+    middleware::{ProxyMiddleware, SharedMiddleware},
+    recorder::Recorder,
+    replay::ReplaySource,
+    upstream::UpstreamRegistry,
+};
 
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).
 #[derive(Default)]
@@ -278,9 +281,10 @@ impl ProxyClusterBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::config::UpstreamTarget;
-    use std::net::SocketAddr;
 
     fn addr() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()

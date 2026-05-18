@@ -17,18 +17,20 @@
 //! push-down of `MethodPathAndBodyHash` replay lookups into SQL — out
 //! of scope here.
 
-use std::path::Path;
-use std::str::FromStr;
+use std::{path::Path, str::FromStr};
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
-use futures::stream::BoxStream;
-use partly_proxy_types::error::{ProxyError, Result};
-use partly_proxy_types::recorded::RecordedExchange;
-use partly_proxy_types::storage::SnapshotStorage;
-use sqlx::Row;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+use futures::{TryStreamExt, stream::BoxStream};
+use partly_proxy_types::{
+    error::{ProxyError, Result},
+    recorded::RecordedExchange,
+    storage::SnapshotStorage,
+};
+use sqlx::{
+    Row,
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+    },
 };
 
 /// `SQLite`-backed [`SnapshotStorage`]. Cheap to wrap in `Arc` and share.

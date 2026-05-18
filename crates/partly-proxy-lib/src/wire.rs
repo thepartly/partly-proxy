@@ -10,17 +10,18 @@
 //! ride on the existing base64-via-serde plumbing in `recorded.rs` —
 //! they must round-trip arbitrary bytes.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
 use http::{Method, StatusCode};
 use partly_proxy_types::RecordedExchange;
 use serde::{Deserialize, Serialize};
 
-use crate::assertions::TrafficFilter;
-use crate::command::{Command, CommandResponse};
-use crate::stub::{RequestMatcher, StubbedResponse};
+use crate::{
+    assertions::TrafficFilter,
+    command::{Command, CommandResponse},
+    stub::{RequestMatcher, StubbedResponse},
+};
 
 /// Filter portion of every assertion / query command, flattened.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

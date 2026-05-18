@@ -6,16 +6,14 @@
 //! both the listener path and the command-processor path without a
 //! circular dependency.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use tokio::sync::watch;
 
-use crate::forwarder::Forwarder;
-use crate::middleware::SharedMiddleware;
-use crate::recorder::Recorder;
-use crate::replay::ReplaySource;
-use crate::stub::StubStore;
+use crate::{
+    forwarder::Forwarder, middleware::SharedMiddleware, recorder::Recorder, replay::ReplaySource,
+    stub::StubStore,
+};
 
 /// Per-upstream runtime state shared with every accepted connection and with
 /// the command processor.

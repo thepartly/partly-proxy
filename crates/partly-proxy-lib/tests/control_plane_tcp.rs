@@ -1,13 +1,14 @@
 //! End-to-end coverage of the JSON-Lines TCP control plane.
 
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{ProxyClusterBuilder, ProxyConfig, RecordingConfig, UpstreamTarget};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
-use tokio::task::JoinHandle;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::TcpStream,
+    task::JoinHandle,
+};
 
 async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
     let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();

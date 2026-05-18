@@ -6,17 +6,16 @@
 //! cycle plus the per-line durability behaviour the JSONL backend is
 //! contracted to provide.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, Method};
 use partly_proxy_storage_jsonl::{JsonlStorage, parse_ndjson_line};
-use partly_proxy_types::recorded::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse,
+use partly_proxy_types::{
+    recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse},
+    storage::SnapshotStorage,
 };
-use partly_proxy_types::storage::SnapshotStorage;
 use tokio::io::AsyncWriteExt;
 
 fn make_exchange(path: &str, body: &[u8], status: u16) -> RecordedExchange {

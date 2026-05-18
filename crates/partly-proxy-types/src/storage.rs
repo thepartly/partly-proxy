@@ -79,8 +79,7 @@ use async_trait::async_trait;
 // `load()` without adding `futures` to their own Cargo.toml.
 pub use futures::stream::BoxStream;
 
-use crate::error::Result;
-use crate::recorded::RecordedExchange;
+use crate::{error::Result, recorded::RecordedExchange};
 
 /// Convenience alias for the stream type returned by [`SnapshotStorage::load`].
 ///

@@ -10,12 +10,10 @@
 //! §6.4) happens in the lifecycle code *before* this recorder is called —
 //! the recorder hashes and stores whatever it is handed.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
-use tokio::sync::{Notify, RwLock};
+use std::{collections::VecDeque, sync::Arc};
 
 use partly_proxy_types::{RecordedExchange, Result, SharedStorage};
+use tokio::sync::{Notify, RwLock};
 
 use crate::config::RecordingConfig;
 
@@ -224,11 +222,13 @@ impl Recorder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use bytes::Bytes;
     use http::{HeaderMap, Method};
     use partly_proxy_types::{ExchangeOutcome, RecordedRequest, RecordedResponse};
-    use std::time::Duration;
+
+    use super::*;
 
     fn make_exchange(path: &str, body: &[u8]) -> RecordedExchange {
         let req = RecordedRequest::from_parts(

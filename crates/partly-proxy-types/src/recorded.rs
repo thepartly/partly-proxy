@@ -5,8 +5,7 @@
 //! sources read them back; the JSON-Lines control plane carries them in
 //! response payloads.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -202,8 +201,9 @@ mod duration_ms {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use http::header::HeaderValue;
+
+    use super::*;
 
     #[test]
     fn sha256_hex_matches_known_value() {

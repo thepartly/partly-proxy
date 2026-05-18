@@ -1,19 +1,17 @@
 //! Replay layered with middleware, stubs and the live forwarder.
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    Command, MatchStrategy, Next, ProxyClusterBuilder, ProxyConfig, ProxyMiddleware, ProxyRequest,
-    ProxyResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
+    Command, ExchangeOutcome, MatchStrategy, Next, ProxyClusterBuilder, ProxyConfig,
+    ProxyMiddleware, ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest,
+    RecordedResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
     Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
 };
-use partly_proxy_lib::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
 use tokio::task::JoinHandle;
 
 async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {

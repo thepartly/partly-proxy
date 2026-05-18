@@ -1,7 +1,6 @@
 //! End-to-end recording through a real listener + forwarder.
 
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{

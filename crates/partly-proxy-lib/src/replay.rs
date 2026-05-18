@@ -13,28 +13,28 @@
 //! a live `Authorization` header still matches a snapshot recorded with
 //! that header stripped.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 // Only `from_jsonl` uses these — gate them so `--no-default-features`
 // builds don't trip an unused-import warning.
 #[cfg(feature = "storage-jsonl")]
 use std::io::{BufRead, BufReader};
 #[cfg(feature = "storage-jsonl")]
 use std::path::Path;
+use std::{collections::HashMap, sync::Arc};
 
-use partly_proxy_types::recorded::sha256_hex;
-use partly_proxy_types::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage,
-};
 // `ProxyError` is only constructed by the JSONL loader path (and the
 // from_storage tests). Gate the import accordingly to keep
 // --no-default-features warning-free.
 #[cfg(any(test, feature = "storage-jsonl"))]
 use partly_proxy_types::ProxyError;
+use partly_proxy_types::{
+    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage,
+    recorded::sha256_hex,
+};
 
-use crate::middleware::{self, SharedMiddleware};
-use crate::proxy_io::{ProxyRequest, ProxyResponse};
+use crate::{
+    middleware::{self, SharedMiddleware},
+    proxy_io::{ProxyRequest, ProxyResponse},
+};
 
 /// Predicate type used by [`MatchStrategy::Custom`]. Defined as a type alias
 /// so the trait-object type doesn't trip clippy's `type_complexity` lint.
@@ -258,11 +258,13 @@ fn build_header_map(pairs: &[(String, String)]) -> http::HeaderMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use bytes::Bytes;
     use http::{HeaderMap, Method, StatusCode};
     use partly_proxy_types::{RecordedRequest, RecordedResponse};
-    use std::time::Duration;
+
+    use super::*;
 
     fn make_exchange(method: Method, path: &str, body: &[u8], status: u16) -> RecordedExchange {
         let req = RecordedRequest::from_parts(
@@ -444,9 +446,11 @@ mod tests {
         async fn append(&self, _exchange: &RecordedExchange) -> Result<()> {
             Ok(())
         }
+
         async fn flush(&self) -> Result<()> {
             Ok(())
         }
+
         fn load(&self) -> futures::stream::BoxStream<'_, Result<RecordedExchange>> {
             let items: Vec<Result<RecordedExchange>> =
                 self.exchanges.iter().cloned().map(Ok).collect();
@@ -482,9 +486,11 @@ mod tests {
             async fn append(&self, _: &RecordedExchange) -> Result<()> {
                 Ok(())
             }
+
             async fn flush(&self) -> Result<()> {
                 Ok(())
             }
+
             fn load(&self) -> futures::stream::BoxStream<'_, Result<RecordedExchange>> {
                 Box::pin(futures::stream::iter([Err(ProxyError::Recording(
                     std::io::Error::other("synthetic"),

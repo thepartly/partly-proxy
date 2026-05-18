@@ -110,13 +110,15 @@ fn parse_path(uri: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use bytes::Bytes;
     use http::{HeaderMap, Method};
     use partly_proxy_types::{
         ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse,
     };
-    use std::time::Duration;
+
+    use super::*;
 
     fn ex(method: Method, path: &str, status: u16) -> RecordedExchange {
         let req = RecordedRequest::from_parts(
