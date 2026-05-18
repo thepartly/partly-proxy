@@ -19,7 +19,6 @@ categories = ["development-tools::testing", "network-programming"]
 default = ["storage-jsonl"]
 storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
 storage-sqlite = ["dep:partly-proxy-storage-sqlite"]
-storage-object = ["dep:partly-proxy-storage-object"]
 testing = []
 
 [lints.rust]
@@ -49,7 +48,6 @@ partly-proxy-types = { path = "../partly-proxy-types" }
 # the matching feature is on.
 partly-proxy-storage-jsonl = { path = "../partly-proxy-storage-jsonl", optional = true }
 partly-proxy-storage-sqlite = { path = "../partly-proxy-storage-sqlite", optional = true }
-partly-proxy-storage-object = { path = "../partly-proxy-storage-object", optional = true }
 
 tokio = { workspace = true }
 bytes = { workspace = true }

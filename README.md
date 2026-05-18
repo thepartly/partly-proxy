@@ -121,7 +121,7 @@ to them.
 | --------------------------------------------- | -------------------------------------------------- |
 | Plain HTTP listener + forwarder (hyper 1.x)   | HTTP/1.1 + HTTP/2 auto-negotiation                 |
 | Inbound + outbound TLS (rustls)               | Custom CAs and `accept_invalid_certs` for testing  |
-| Recorder + pluggable snapshot storage         | NDJSON / SQLite / S3-compatible object store       |
+| Recorder + pluggable snapshot storage         | NDJSON / SQLite                                    |
 | Replay (`MethodPathAndBodyHash` + `Custom`)   | O(1) indexed lookup; goes through redaction hooks  |
 | Middleware chain with `Next<'_>`              | Body rewrites, short-circuit, error recovery       |
 | Stubs + in-process command plane              | Fire-count, artificial delay, pause/resume         |

@@ -6,11 +6,11 @@
 //! round-trip, and shutdown is the single durability fence.
 //!
 //! Backends live in their own workspace crates (`partly-proxy-storage-jsonl`,
-//! `partly-proxy-storage-sqlite`, `partly-proxy-storage-object`). The lib's
-//! `storage-jsonl` / `storage-sqlite` / `storage-object` Cargo features
-//! additively pull them in and re-export them at `partly_proxy_lib::jsonl`
-//! etc., so callers can either depend on the backend crate directly or
-//! enable the feature on the lib.
+//! `partly-proxy-storage-sqlite`). The lib's `storage-jsonl` /
+//! `storage-sqlite` Cargo features additively pull them in and re-export
+//! them at `partly_proxy_lib::jsonl` / `partly_proxy_lib::sqlite`, so
+//! callers can either depend on the backend crate directly or enable the
+//! feature on the lib.
 
 use std::sync::Arc;
 

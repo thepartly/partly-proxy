@@ -24,7 +24,7 @@ cargo check --workspace --no-default-features
 
 echo "==> cargo check --workspace --all-features"
 # Confirms every backend coexists — catches accidental dep collisions
-# between sqlx, object_store, JSONL, etc.
+# between sqlx, the JSONL backend, and any other backend that lands.
 cargo check --workspace --all-features
 
 echo "==> cargo test -p partly-proxy-lib --no-default-features --lib"

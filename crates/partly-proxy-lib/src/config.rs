@@ -96,8 +96,7 @@ impl Default for UpstreamTarget {
 /// Recording configuration — see `SPECIFICATION.md` §3.3.
 ///
 /// Controls the recorder's in-memory ring buffer only. Persistence —
-/// NDJSON file, `SQLite` database, S3-compatible object store, or
-/// anything else implementing
+/// NDJSON file, `SQLite` database, or anything else implementing
 /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured
 /// separately via
 /// [`Recorder::with_storage`](crate::Recorder::with_storage) or
