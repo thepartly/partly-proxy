@@ -14,7 +14,7 @@
 //! The `payload` column carries the canonical JSON encoding of the
 //! exchange so cross-backend bytes are identical. Dedicated `method`,
 //! `uri`, and `body_sha256` columns sit alongside `payload` for a future
-//! push-down of `MethodPathAndBodyHash` replay lookups into SQL — out
+//! push-down of `MethodUriAndBodyHash` replay lookups into SQL — out
 //! of scope here.
 
 use std::{path::Path, str::FromStr};
