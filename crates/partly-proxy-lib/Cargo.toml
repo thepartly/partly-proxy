@@ -112,6 +112,13 @@ bytes = { workspace = true }
 rcgen = { workspace = true }
 tracing-subscriber = { workspace = true }
 partly-proxy-echo = { workspace = true }
+# Benches exercise both first-party storage backends through the full
+# proxy pipeline. JSONL is already enabled via the default feature set;
+# SQLite is pulled in as a dev-dep directly so the benches can construct
+# `SqliteStorage` without needing the `storage-sqlite` feature on.
+partly-proxy-storage-jsonl = { workspace = true }
+partly-proxy-storage-sqlite = { workspace = true }
+criterion = { workspace = true }
 
 # Test-only OTEL SDK for the integration tests' in-memory span exporter.
 # `opentelemetry_0_27` itself reaches the test crate through the optional
@@ -122,3 +129,15 @@ opentelemetry_sdk_0_27 = { workspace = true }
 [[example]]
 name = "host"
 path = "examples/host.rs"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "latency"
+harness = false
+
+[[bench]]
+name = "large_body"
+harness = false

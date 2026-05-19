@@ -34,3 +34,9 @@ serde_json = { workspace = true }
 partly-proxy-types = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
+futures = { workspace = true }
+
+[[bench]]
+name = "storage_sqlite"
+harness = false

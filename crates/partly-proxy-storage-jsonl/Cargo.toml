@@ -39,3 +39,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes = { workspace = true }
 http = { workspace = true }
 serde_json = { workspace = true }
+criterion = { workspace = true }
+futures = { workspace = true }
+
+[[bench]]
+name = "storage_jsonl"
+harness = false

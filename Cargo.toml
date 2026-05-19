@@ -83,6 +83,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tempfile = "3"
 rcgen = "0.13"
 
+# Benchmarks. `async_tokio` lets `Criterion::bench_function` drive async
+# bodies via `to_async(&runtime).iter_custom(...)`.
+criterion = { version = "0.5", features = ["async_tokio"] }
+
 # OpenTelemetry — version-suffixed renames so multiple minor versions can
 # coexist in the workspace as the OTEL Rust crates churn. See the proxy
 # lib's `otel_0_*` features. Add a new block per supported minor; do not
