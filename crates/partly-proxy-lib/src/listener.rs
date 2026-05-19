@@ -31,7 +31,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     builder::UpstreamSpec,
     config::Mode,
-    context::RequestContext,
+    context::{RequestContext, ResponseSource},
     forwarder::Forwarder,
     middleware::{self, SharedMiddleware, Terminal, TerminalFuture},
     proxy_io::{ProxyRequest, ProxyResponse},
@@ -438,27 +438,35 @@ struct LiveTerminal<'a> {
 }
 
 impl Terminal for LiveTerminal<'_> {
-    fn invoke<'b>(&'b self, req: ProxyRequest, _ctx: &'b mut RequestContext) -> TerminalFuture<'b> {
+    fn invoke<'b>(&'b self, req: ProxyRequest, ctx: &'b mut RequestContext) -> TerminalFuture<'b> {
         Box::pin(async move {
             // Lifecycle stage 6: stub scan. The first matching stub wins.
             if let Some((response, delay)) = self.runtime.stubs.take_match(&req).await {
                 if let Some(d) = delay {
                     tokio::time::sleep(d).await;
                 }
+                ctx.insert(ResponseSource::Stub);
                 return Ok(response.into_proxy());
             }
             // Lifecycle stage 7: replay lookup. The lookup applies
             // `redact_request_for_snapshot` to a working copy before hashing.
             if let Some(source) = &self.runtime.replay {
                 if let Some(resp) = source.lookup(&req, &self.runtime.middleware) {
+                    ctx.insert(ResponseSource::Snapshot);
                     return Ok(resp);
                 }
             }
             // Lifecycle stage 8: terminal miss. In Replay mode we never
             // touch the upstream — see SPECIFICATION.md §8.3.
             match self.runtime.mode {
-                Mode::Replay => Ok(replay_miss_response()),
+                Mode::Replay => {
+                    ctx.insert(ResponseSource::ReplayMiss);
+                    Ok(replay_miss_response())
+                }
                 Mode::Record => {
+                    // Stamp before awaiting so the marker is present even
+                    // if the forward errors.
+                    ctx.insert(ResponseSource::Upstream);
                     self.runtime
                         .forwarder
                         .forward(req, &self.runtime.name)

@@ -1,6 +1,10 @@
 //! Replay layered with middleware, stubs and the live forwarder.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -10,7 +14,7 @@ use partly_proxy_lib::{
     Command, ExchangeOutcome, MatchStrategy, Mode, Next, ProxyClusterBuilder, ProxyConfig,
     ProxyMiddleware, ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest,
     RecordedResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
-    Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
+    ResponseSource, Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
 };
 use tokio::task::JoinHandle;
 
@@ -383,6 +387,202 @@ async fn replay_records_served_exchanges_when_recording_enabled() {
         .as_response()
         .expect("response outcome");
     assert_eq!(resp.body, Bytes::from_static(b"replay-body"));
+
+    cluster.shutdown().await.unwrap();
+}
+
+/// Captures `ctx.response_source()` after `next.run` returns. Used by the
+/// `ResponseSource` tests to assert which terminal branch produced the response.
+struct CaptureSource(Arc<Mutex<Option<ResponseSource>>>);
+
+#[async_trait]
+impl ProxyMiddleware for CaptureSource {
+    async fn handle(
+        &self,
+        req: ProxyRequest,
+        ctx: &mut RequestContext,
+        next: Next<'_>,
+    ) -> ProxyResult<ProxyResponse> {
+        let resp = next.run(req, ctx).await;
+        *self.0.lock().unwrap() = ctx.response_source();
+        resp
+    }
+}
+
+/// Short-circuits without ever calling `next.run`.
+struct ShortCircuit;
+
+#[async_trait]
+impl ProxyMiddleware for ShortCircuit {
+    async fn handle(
+        &self,
+        _req: ProxyRequest,
+        _ctx: &mut RequestContext,
+        _next: Next<'_>,
+    ) -> ProxyResult<ProxyResponse> {
+        Ok(ProxyResponse::new(StatusCode::IM_A_TEAPOT).with_body(Bytes::from_static(b"short")))
+    }
+}
+
+fn unreachable_addr() -> SocketAddr {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let a = l.local_addr().unwrap();
+    drop(l);
+    a
+}
+
+#[tokio::test]
+async fn response_source_stub_marks_ctx() {
+    let captured = Arc::new(Mutex::new(None));
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{}", unreachable_addr())),
+            vec![Arc::new(CaptureSource(captured.clone())) as SharedMiddleware],
+            None,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    cluster
+        .command_sender()
+        .send(Command::Stub {
+            upstream: None,
+            matcher: RequestMatcher::new().method(Method::GET).path("/x"),
+            response: StubbedResponse::new(StatusCode::OK).body(Bytes::from_static(b"ok")),
+            times: Some(1),
+        })
+        .await
+        .unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(*captured.lock().unwrap(), Some(ResponseSource::Stub));
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_source_snapshot_marks_ctx() {
+    let captured = Arc::new(Mutex::new(None));
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/x", b"", 200, b"replayed")],
+        MatchStrategy::MethodUriAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with_mode(
+            "api",
+            cfg(format!("http://{}", unreachable_addr())),
+            vec![Arc::new(CaptureSource(captured.clone())) as SharedMiddleware],
+            Some(replay),
+            Mode::Replay,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(*captured.lock().unwrap(), Some(ResponseSource::Snapshot));
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_source_replay_miss_marks_ctx() {
+    let captured = Arc::new(Mutex::new(None));
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/x", b"", 200, b"replayed")],
+        MatchStrategy::MethodUriAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with_mode(
+            "api",
+            cfg(format!("http://{}", unreachable_addr())),
+            vec![Arc::new(CaptureSource(captured.clone())) as SharedMiddleware],
+            Some(replay),
+            Mode::Replay,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/miss"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(*captured.lock().unwrap(), Some(ResponseSource::ReplayMiss));
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_source_upstream_marks_ctx() {
+    let (echo_addr, _t) = spawn_echo().await;
+    let captured = Arc::new(Mutex::new(None));
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with_mode(
+            "api",
+            cfg(format!("http://{echo_addr}")),
+            vec![Arc::new(CaptureSource(captured.clone())) as SharedMiddleware],
+            None,
+            Mode::Record,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/anything"))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(*captured.lock().unwrap(), Some(ResponseSource::Upstream));
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_source_absent_when_middleware_short_circuits() {
+    let captured = Arc::new(Mutex::new(None));
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with(
+            "api",
+            cfg(format!("http://{}", unreachable_addr())),
+            vec![
+                Arc::new(CaptureSource(captured.clone())) as SharedMiddleware,
+                Arc::new(ShortCircuit) as SharedMiddleware,
+            ],
+            None,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    let r = http_client()
+        .get(format!("http://{proxy}/anything"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::IM_A_TEAPOT);
+    assert_eq!(*captured.lock().unwrap(), None);
 
     cluster.shutdown().await.unwrap();
 }
