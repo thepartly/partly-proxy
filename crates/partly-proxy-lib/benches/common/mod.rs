@@ -20,8 +20,7 @@ use hyper_util::{
 };
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, ProxyClusterBuilder, ProxyConfig, RecordingConfig, SharedStorage,
-    UpstreamTarget,
+    ClusterHandle, ProxyClusterBuilder, ProxyConfig, RecordingConfig, SharedStorage, UpstreamTarget,
 };
 use tempfile::TempDir;
 use tokio::task::JoinHandle;

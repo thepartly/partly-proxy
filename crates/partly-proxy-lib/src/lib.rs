@@ -38,7 +38,7 @@ pub use builder::ProxyClusterBuilder;
 pub use cluster::ClusterHandle;
 pub use command::{Command, CommandResponse, CommandSender};
 pub use config::{
-    InboundTlsConfig, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
+    InboundTlsConfig, Mode, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
 };
 pub use context::RequestContext;
 pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};

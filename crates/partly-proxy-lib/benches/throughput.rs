@@ -15,7 +15,9 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tokio::{sync::Semaphore, task::JoinSet};
 
-use crate::common::{ProxyHandle, Recording, do_get, http_client, multi_thread_runtime, spawn_proxy};
+use crate::common::{
+    ProxyHandle, Recording, do_get, http_client, multi_thread_runtime, spawn_proxy,
+};
 
 /// Requests per iteration. Big enough to amortise per-iteration tokio
 /// scheduling cost; small enough that Criterion can take many samples.

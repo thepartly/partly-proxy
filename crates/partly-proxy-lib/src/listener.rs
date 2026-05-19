@@ -30,6 +30,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     builder::UpstreamSpec,
+    config::Mode,
     context::RequestContext,
     forwarder::Forwarder,
     middleware::{self, SharedMiddleware, Terminal, TerminalFuture},
@@ -88,7 +89,14 @@ pub(crate) async fn spawn_listener(
     let mut middleware = global_middleware;
     middleware.extend(spec.middleware);
 
-    let runtime = UpstreamRuntime::new(spec.name, forwarder, recorder, middleware, spec.replay);
+    let runtime = UpstreamRuntime::new(
+        spec.name,
+        forwarder,
+        recorder,
+        middleware,
+        spec.replay,
+        spec.mode,
+    );
     #[cfg(feature = "_otel_any")]
     let runtime = runtime.with_otel(otel_runtime);
     let runtime = Arc::new(runtime);
@@ -446,12 +454,34 @@ impl Terminal for LiveTerminal<'_> {
                     return Ok(resp);
                 }
             }
-            // Lifecycle stage 8: forward.
-            self.runtime
-                .forwarder
-                .forward(req, &self.runtime.name)
-                .await
+            // Lifecycle stage 8: terminal miss. In Replay mode we never
+            // touch the upstream — see SPECIFICATION.md §8.3.
+            match self.runtime.mode {
+                Mode::Replay => Ok(replay_miss_response()),
+                Mode::Record => {
+                    self.runtime
+                        .forwarder
+                        .forward(req, &self.runtime.name)
+                        .await
+                }
+            }
         })
+    }
+}
+
+/// `503` response served when a request in [`Mode::Replay`] finds no
+/// matching stub and no matching snapshot — the proxy must not forward.
+fn replay_miss_response() -> ProxyResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    ProxyResponse {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        headers,
+        body: Bytes::from_static(b"{}"),
+        version: Version::HTTP_11,
     }
 }
 

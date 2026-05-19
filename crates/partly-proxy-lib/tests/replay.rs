@@ -7,7 +7,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    Command, ExchangeOutcome, MatchStrategy, Next, ProxyClusterBuilder, ProxyConfig,
+    Command, ExchangeOutcome, MatchStrategy, Mode, Next, ProxyClusterBuilder, ProxyConfig,
     ProxyMiddleware, ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest,
     RecordedResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
     Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
@@ -87,11 +87,12 @@ async fn replay_hit_serves_recorded_response_without_touching_upstream() {
         MatchStrategy::MethodPathAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
-        .add_upstream_with(
+        .add_upstream_with_mode(
             "api",
             cfg(format!("http://{unreachable}")),
             Vec::new(),
             Some(replay),
+            Mode::Replay,
         )
         .run()
         .await
@@ -110,18 +111,76 @@ async fn replay_hit_serves_recorded_response_without_touching_upstream() {
 }
 
 #[tokio::test]
-async fn replay_miss_falls_through_to_upstream() {
+async fn replay_mode_miss_returns_503_without_touching_upstream() {
+    // SPECIFICATION.md §8.3: in Mode::Replay a replay miss never forwards to
+    // the upstream — it returns 503 with body `{}`. Point the upstream at an
+    // unreachable address so any accidental forward would surface as a 502.
+    let unreachable = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a = l.local_addr().unwrap();
+        drop(l);
+        a
+    };
+    let replay = ReplaySource::new(
+        vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
+        MatchStrategy::MethodPathAndBodyHash,
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .add_upstream_with_mode(
+            "api",
+            cfg(format!("http://{unreachable}")),
+            Vec::new(),
+            Some(replay),
+            Mode::Replay,
+        )
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("api").unwrap();
+
+    // /health is in the snapshot — replay hits.
+    let r = http_client()
+        .get(format!("http://{proxy}/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), "replayed");
+
+    // /other is not — Mode::Replay returns 503 {} rather than forwarding.
+    let r = http_client()
+        .get(format!("http://{proxy}/other"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        r.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/json")
+    );
+    assert_eq!(r.text().await.unwrap(), "{}");
+
+    cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn record_mode_miss_falls_through_to_upstream() {
+    // SPECIFICATION.md §8.3: in Mode::Record a replay miss falls through to
+    // the upstream so the new exchange can be recorded.
     let (echo_addr, _t) = spawn_echo().await;
     let replay = ReplaySource::new(
         vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
         MatchStrategy::MethodPathAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
-        .add_upstream_with(
+        .add_upstream_with_mode(
             "api",
             cfg(format!("http://{echo_addr}")),
             Vec::new(),
             Some(replay),
+            Mode::Record,
         )
         .run()
         .await

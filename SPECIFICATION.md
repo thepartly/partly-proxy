@@ -112,6 +112,8 @@ let cluster = ProxyClusterBuilder::new()
     .add_upstream("api", api_config)                       // no middleware, no replay
     .add_upstream_with_middleware("billing", b_cfg, b_mw)  // per-upstream middleware
     .add_upstream_with("legacy", l_cfg, l_mw, Some(replay_source))
+    // For deterministic playback against a snapshot file (no upstream dial):
+    .add_upstream_with_mode("frozen", f_cfg, f_mw, Some(snapshot), Mode::Replay)
     .run()
     .await?;
 ```
@@ -150,10 +152,12 @@ Each incoming request flows through the following ordered stages. Earlier stages
 5. **Middleware chain** — global middleware then per-upstream middleware, composed via `Next`. Each middleware decides whether to call `next.run(req, ctx).await`. The innermost call falls through to the terminal stages below.
 6. **Terminal: Stub scan** — first matching active stub wins. Honours its optional artificial `delay`. Decrements its `times` counter; removes the stub when exhausted.
 7. **Terminal: Replay lookup** — if a replay source is configured, the proxy makes a working copy of the request, runs `redact_request_for_snapshot` across the middleware chain on that copy, then looks the copy up by the chosen match strategy. A hit returns the recorded response. The original request is unchanged.
-8. **Terminal: Forward to upstream** — if no stub and no replay hit. A failure here surfaces as `Err(ProxyError::Upstream*)` back through the middleware chain, where any middleware can catch and recover. If no middleware catches, the proxy returns `502 Bad Gateway`.
-9. **Record** — if recording is enabled, the exchange (request + final response or error) is cloned, run through `redact_request_for_snapshot` / `redact_response_for_snapshot` across the middleware chain, and only then hashed, serialised, and recorded under this upstream's name. Recording sees the response *after* middleware `handle` has finished modifying it; the redaction step is on top of that and only affects the persisted copy, not what the client receives.
+8. **Terminal: Miss handling** — if no stub and no replay hit, the next step is governed by the upstream's [`Mode`](#83-mode-interactions):
+    - **`Mode::Record`** — forward to the upstream. A failure here surfaces as `Err(ProxyError::Upstream*)` back through the middleware chain, where any middleware can catch and recover. If no middleware catches, the proxy returns `502 Bad Gateway`.
+    - **`Mode::Replay`** — never touch the upstream. The proxy returns `503 Service Unavailable` with body `{}` and `Content-Type: application/json`.
+9. **Record** — in `Mode::Record`, if recording is enabled, the exchange (request + final response or error) is cloned, run through `redact_request_for_snapshot` / `redact_response_for_snapshot` across the middleware chain, and only then hashed, serialised, and recorded under this upstream's name. Recording sees the response *after* middleware `handle` has finished modifying it; the redaction step is on top of that and only affects the persisted copy, not what the client receives. `Mode::Replay` does not record.
 
-**Priority of response sources:** middleware short-circuit > stub > replay > upstream. A middleware that synthesises a response wins over everything below; a stub overrides a matching replay snapshot.
+**Priority of response sources:** middleware short-circuit > stub > replay > (upstream | `503 {}`). A middleware that synthesises a response wins over everything below; a stub overrides a matching replay snapshot. Whether a miss falls through to the upstream or to a `503 {}` is determined by `Mode`.
 
 ---
 
@@ -202,10 +206,10 @@ This is a deliberate trade against streaming: the proxy targets integration test
 
 `Next<'_>` is a cursor over the remaining middleware plus the terminal stages (stub → replay → forward). A middleware chooses what to do with it:
 
-- **Pass through.** `let resp = next.run(req, ctx).await?;` advances one step. If this is the last middleware, `next.run` drives stub lookup, replay, and forwarding.
+- **Pass through.** `let resp = next.run(req, ctx).await?;` advances one step. If this is the last middleware, `next.run` drives stub lookup, replay, and the configured miss-handling for this upstream's `Mode` (forward or `503 {}`).
 - **Inspect or rewrite the request body.** `req.body` is `Bytes`. Hash it, parse it, rewrite it (`req.body = new_bytes;`), then pass `req` to `next.run`.
 - **Inspect or rewrite the response body.** Take the `ProxyResponse` returned by `next.run(...).await` and mutate `resp.body` directly. The next middleware up sees your edits as the new body.
-- **Short-circuit.** Build a `ProxyResponse` (with whatever `Bytes` body you want) and return `Ok(response)` without ever calling `next` — stub/replay/forward never run.
+- **Short-circuit.** Build a `ProxyResponse` (with whatever `Bytes` body you want) and return `Ok(response)` without ever calling `next` — stub/replay/forward (or the `Mode::Replay` 503) never run.
 - **Recover from errors.** Match on the `Err` from `next.run(...).await` and return `Ok(recovery)` instead. This replaces the old `on_error` hook.
 - **Fail.** Return `Err(ProxyError::Middleware(...))` to abort the request.
 
@@ -417,12 +421,18 @@ The redaction is applied to a working copy; the live request handed to stub/forw
 
 ### 8.3 Mode interactions
 
-Replay is always layered with middleware and stubs. There are exactly two supported configurations:
+Each upstream is registered in exactly one `Mode`. The mode determines what happens when the terminal stages find no matching stub and no matching snapshot:
 
-- **Replay + middleware + stubs**: configure a replay source, register stubs over the command plane, and run middleware in front. Stubs take priority over replay, so a test can override specific calls without rebuilding the snapshot; middleware wraps the terminal stages, so a replayed response is observable and rewritable exactly like an upstream response. The upstream itself can be unreachable; unmatched requests (no middleware short-circuit, no stub hit, no replay hit, no upstream) yield 502.
-- **Replay + middleware + stubs + recording**: as above, plus a `RecordingConfig`. Every served exchange — whether the response came from a middleware short-circuit, a stub, or replay — is recorded under the upstream name, so a session can be observed and re-snapshotted while it runs.
+| Mode | Replay hit | Replay miss | Records served exchanges? |
+|------|------------|-------------|---------------------------|
+| `Mode::Record` (default) | serves the recorded response | forwards to the upstream | yes, when `RecordingConfig` is enabled |
+| `Mode::Replay` | serves the recorded response | returns `503` with body `{}` (Content-Type `application/json`) | no |
 
-Replay-only (no middleware, no stubs) and replay+recording-only configurations are not supported as standalone modes; in practice every test wants at least middleware in the chain, and stubs cost nothing when none are registered.
+`Mode::Replay` is for deterministic playback against a snapshot file — the upstream may be unreachable, dead, or omitted entirely, and the proxy is guaranteed never to dial it. `Mode::Record` is for live capture: the snapshot (if any) acts as a deduplicating cache so already-seen requests do not re-hit the upstream, while new requests are forwarded and recorded.
+
+Either mode composes with middleware and stubs the same way: stubs take priority over replay, and middleware wraps the terminal stages, so a replayed or 503 response is observable and rewritable exactly like an upstream response.
+
+The builder defaults to `Mode::Record` (`add_upstream`, `add_upstream_with_middleware`, and `add_upstream_with`). To select `Mode::Replay`, use `add_upstream_with_mode(name, cfg, middleware, replay, Mode::Replay)`.
 
 ---
 

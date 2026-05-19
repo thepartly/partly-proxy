@@ -106,11 +106,7 @@ fn load_10k(c: &mut Criterion) {
         b.to_async(&runtime).iter(|| {
             let storage = storage.clone();
             async move {
-                let loaded: Vec<_> = storage
-                    .load()
-                    .try_collect()
-                    .await
-                    .expect("load stream");
+                let loaded: Vec<_> = storage.load().try_collect().await.expect("load stream");
                 assert_eq!(loaded.len(), LOAD_N);
             }
         });

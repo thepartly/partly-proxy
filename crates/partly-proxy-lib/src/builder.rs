@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use crate::{
     cluster::{ClusterHandle, RunningUpstream},
     command,
-    config::{ProxyConfig, RecordingConfig},
+    config::{Mode, ProxyConfig, RecordingConfig},
     control_plane, listener,
     middleware::{ProxyMiddleware, SharedMiddleware},
     recorder::Recorder,
@@ -58,6 +58,7 @@ pub(crate) struct UpstreamSpec {
     pub config: ProxyConfig,
     pub middleware: Vec<SharedMiddleware>,
     pub replay: Option<ReplaySource>,
+    pub mode: Mode,
 }
 
 impl std::fmt::Debug for UpstreamSpec {
@@ -66,6 +67,7 @@ impl std::fmt::Debug for UpstreamSpec {
             .field("name", &self.name)
             .field("middleware", &self.middleware.len())
             .field("replay", &self.replay.is_some())
+            .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
 }
@@ -84,18 +86,21 @@ impl ProxyClusterBuilder {
 
     /// Register an upstream with no per-upstream middleware and no replay
     /// source. Names should be unique; duplicates are surfaced by `run()`.
+    /// Defaults to [`Mode::Record`].
     pub fn add_upstream(mut self, name: impl Into<String>, config: ProxyConfig) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware: Vec::new(),
             replay: None,
+            mode: Mode::Record,
         });
         self
     }
 
     /// Register an upstream with a list of per-upstream middleware. The
     /// effective chain for that upstream becomes `global ++ per_upstream`.
+    /// Defaults to [`Mode::Record`].
     pub fn add_upstream_with_middleware(
         mut self,
         name: impl Into<String>,
@@ -107,16 +112,18 @@ impl ProxyClusterBuilder {
             config,
             middleware,
             replay: None,
+            mode: Mode::Record,
         });
         self
     }
 
     /// Register an upstream with both per-upstream middleware and an
-    /// optional replay source — the most general per-upstream registration.
+    /// optional replay source. Defaults to [`Mode::Record`].
     ///
-    /// See `SPECIFICATION.md` §8.3: replay is always layered with middleware
-    /// and stubs; stubs (registered later over the command plane) take
-    /// priority over replay, which takes priority over the upstream forward.
+    /// See `SPECIFICATION.md` §8.3: in `Record` mode, stubs take priority
+    /// over replay, which takes priority over the upstream forward. To
+    /// replay snapshots without ever forwarding to the upstream, use
+    /// [`Self::add_upstream_with_mode`] with [`Mode::Replay`].
     pub fn add_upstream_with(
         mut self,
         name: impl Into<String>,
@@ -129,6 +136,31 @@ impl ProxyClusterBuilder {
             config,
             middleware,
             replay,
+            mode: Mode::Record,
+        });
+        self
+    }
+
+    /// Register an upstream with an explicit [`Mode`].
+    ///
+    /// In [`Mode::Replay`] the terminal never forwards to the upstream — a
+    /// missing snapshot yields a `503 {}` response. In [`Mode::Record`] the
+    /// terminal falls through to the upstream on miss and (when recording
+    /// is enabled) appends the exchange to the recorder.
+    pub fn add_upstream_with_mode(
+        mut self,
+        name: impl Into<String>,
+        config: ProxyConfig,
+        middleware: Vec<SharedMiddleware>,
+        replay: Option<ReplaySource>,
+        mode: Mode,
+    ) -> Self {
+        self.upstreams.push(UpstreamSpec {
+            name: name.into(),
+            config,
+            middleware,
+            replay,
+            mode,
         });
         self
     }

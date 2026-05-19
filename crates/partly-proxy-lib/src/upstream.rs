@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::watch;
 
 use crate::{
-    forwarder::Forwarder, middleware::SharedMiddleware, recorder::Recorder, replay::ReplaySource,
-    stub::StubStore,
+    config::Mode, forwarder::Forwarder, middleware::SharedMiddleware, recorder::Recorder,
+    replay::ReplaySource, stub::StubStore,
 };
 
 /// OTEL fields cached on the runtime so the request path can build server
@@ -55,6 +55,8 @@ pub(crate) struct UpstreamRuntime {
     pub pause: watch::Sender<bool>,
     /// Optional replay source consulted between stub scan and forward.
     pub replay: Option<ReplaySource>,
+    /// What happens on a replay miss — see [`Mode`].
+    pub mode: Mode,
     /// OTEL-only fields. Populated via [`UpstreamRuntime::with_otel`].
     #[cfg(feature = "_otel_any")]
     pub otel: OtelRuntime,
@@ -68,6 +70,7 @@ impl UpstreamRuntime {
         recorder: Recorder,
         middleware: Vec<SharedMiddleware>,
         replay: Option<ReplaySource>,
+        mode: Mode,
     ) -> Self {
         let (pause, _rx) = watch::channel(false);
         Self {
@@ -78,6 +81,7 @@ impl UpstreamRuntime {
             stubs: StubStore::default(),
             pause,
             replay,
+            mode,
             #[cfg(feature = "_otel_any")]
             otel: OtelRuntime::default(),
         }
@@ -105,7 +109,14 @@ impl UpstreamRuntime {
         let recorder = Recorder::new(RecordingConfig::disabled());
         let forwarder =
             Forwarder::new(UpstreamTarget::new("http://127.0.0.1:1")).expect("forwarder builds");
-        Self::new(name.to_owned(), forwarder, recorder, Vec::new(), None)
+        Self::new(
+            name.to_owned(),
+            forwarder,
+            recorder,
+            Vec::new(),
+            None,
+            Mode::Record,
+        )
     }
 }
 

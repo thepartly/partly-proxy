@@ -211,6 +211,26 @@ impl RecordingConfig {
     }
 }
 
+/// Per-upstream mode — see `SPECIFICATION.md` §8.3.
+///
+/// Determines what happens when the terminal stages find no matching stub
+/// and no replay hit:
+///
+/// - [`Mode::Record`] forwards to the upstream and records the exchange.
+///   When a [`ReplaySource`](crate::ReplaySource) is also configured, replay
+///   hits short-circuit before the forward (so previously-seen requests
+///   don't re-hit the upstream).
+/// - [`Mode::Replay`] never touches the upstream. A miss yields a `503` with
+///   an empty-JSON-object body (`{}`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Forward to upstream on a replay miss and record the exchange.
+    #[default]
+    Record,
+    /// Refuse to forward; replay misses return `503 {}`.
+    Replay,
+}
+
 /// Outbound TLS settings — see `SPECIFICATION.md` §3.4.
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamTlsConfig {
