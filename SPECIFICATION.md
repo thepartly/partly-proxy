@@ -269,7 +269,7 @@ pub trait ProxyMiddleware: Send + Sync + 'static {
     ///   1. Just before an exchange is persisted (recording).
     ///   2. Just before a live request is looked up in a replay source.
     /// Because the same transform runs on both sides, the body hash matches
-    /// and `MethodPathAndBodyHash` lookups still succeed.
+    /// and `MethodUriAndBodyHash` lookups still succeed.
     /// Default: no-op.
     fn redact_request_for_snapshot(&self, _req: &mut ProxyRequest) {}
 
@@ -320,7 +320,7 @@ Both calls are infallible by design — they are pure rewrites, not policy decis
 
 #### Invariants the caller must preserve
 
-For `MethodPathAndBodyHash` to keep matching, redaction must be **deterministic**: the same input bytes must produce the same output bytes every time, regardless of clock, randomness, or process. Two practical rules follow:
+For `MethodUriAndBodyHash` to keep matching, redaction must be **deterministic**: the same input bytes must produce the same output bytes every time, regardless of clock, randomness, or process. Two practical rules follow:
 
 - Don't introduce non-determinism (random tokens, timestamps, generated IDs) — replace them with a fixed placeholder.
 - Apply the redaction transform consistently across versions; changing the transform is equivalent to invalidating all prior snapshots indexed by body hash.
@@ -386,26 +386,26 @@ A stub matches a request when **all** of the following hold (any unset field is 
 A `ReplaySource` is an immutable snapshot of recorded exchanges with a chosen match strategy:
 
 ```rust
-let replay = ReplaySource::new(exchanges, MatchStrategy::MethodPathAndBodyHash);
+let replay = ReplaySource::new(exchanges, MatchStrategy::MethodUriAndBodyHash);
 // or
-let replay = ReplaySource::from_jsonl(path, MatchStrategy::MethodPathAndBodyHash)?;
+let replay = ReplaySource::from_jsonl(path, MatchStrategy::MethodUriAndBodyHash)?;
 ```
 
 ### 8.1 Match strategies
 
 | Strategy | Key | Notes |
 |----------|-----|-------|
-| `MethodPathAndBodyHash` (default) | (method, path, SHA-256 hex of body) | Distinguishes identical endpoints called with different payloads |
+| `MethodUriAndBodyHash` (default) | (method, origin-form URI [path + query string], SHA-256 hex of body) | Distinguishes identical endpoints called with different query parameters or payloads. Query-string bytes are compared verbatim; reordered parameters are treated as a different request. |
 | `Custom(closure)` | arbitrary | `Fn(&RecordedRequest, &Request<Bytes>) -> bool` — falls back to linear scan |
 
-`MethodPathAndBodyHash` builds an index at construction time for O(1) lookup. `Custom` is the only other supported strategy; coarser keys (method-only, method+path, method+URI) are intentionally not provided — callers who want those semantics express them as a `Custom` closure.
+`MethodUriAndBodyHash` builds an index at construction time for O(1) lookup. `Custom` is the only other supported strategy; coarser keys (method-only, method+path) and normalised variants (query-parameter canonicalisation, method+URI ignoring query) are intentionally not provided — callers who want those semantics express them as a `Custom` closure.
 
 ### 8.1.1 Scale target
 
 Replay must remain usable with snapshot files containing **10,000 to 100,000 exchanges** — these are realistic sizes for a recorded end-to-end suite, not a worst case to be discouraged. Concretely:
 
 - `ReplaySource::from_jsonl(...)` parses a 100k-line file in a single pass; it does not hold the whole file in a `String` and must stream line-by-line (e.g. `BufReader::lines`) to keep peak memory bounded by the largest single exchange, not the file size.
-- Index construction for `MethodPathAndBodyHash` is O(n) in the number of exchanges; lookup remains O(1) per request regardless of snapshot size. Hash-map capacity should be preallocated from the exchange count to avoid repeated rehashing during load.
+- Index construction for `MethodUriAndBodyHash` is O(n) in the number of exchanges; lookup remains O(1) per request regardless of snapshot size. Hash-map capacity should be preallocated from the exchange count to avoid repeated rehashing during load.
 - `Custom` matchers fall back to a linear scan, which is O(n) per request. With a 100k-exchange snapshot this is the slow path; use it sparingly or pre-filter via the upstream/path before invoking the custom predicate.
 - Memory budget at 100k exchanges with typical JSON payloads (~1–4 KiB body each) is on the order of hundreds of MiB. The proxy keeps decoded `Bytes` bodies in the source verbatim — there is no per-exchange duplication into the recorder unless `Replay + recording` is enabled.
 

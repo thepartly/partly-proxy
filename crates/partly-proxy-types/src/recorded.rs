@@ -13,7 +13,7 @@ use crate::hash::sha256_hex;
 /// One recorded request.
 ///
 /// `body_sha256` is computed *after* any snapshot-boundary redaction
-/// (§6.4) — it's the match key for `MethodPathAndBodyHash` replay lookups.
+/// (§6.4) — it's the match key for `MethodUriAndBodyHash` replay lookups.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecordedRequest {
     pub method: String,

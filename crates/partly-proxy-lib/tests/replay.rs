@@ -84,7 +84,7 @@ async fn replay_hit_serves_recorded_response_without_touching_upstream() {
             200,
             b"{\"ok\":true}",
         )],
-        MatchStrategy::MethodPathAndBodyHash,
+        MatchStrategy::MethodUriAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_mode(
@@ -123,7 +123,7 @@ async fn replay_mode_miss_returns_503_without_touching_upstream() {
     };
     let replay = ReplaySource::new(
         vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
-        MatchStrategy::MethodPathAndBodyHash,
+        MatchStrategy::MethodUriAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_mode(
@@ -172,7 +172,7 @@ async fn record_mode_miss_falls_through_to_upstream() {
     let (echo_addr, _t) = spawn_echo().await;
     let replay = ReplaySource::new(
         vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
-        MatchStrategy::MethodPathAndBodyHash,
+        MatchStrategy::MethodUriAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_mode(
@@ -217,7 +217,7 @@ async fn stub_takes_priority_over_replay() {
     };
     let replay = ReplaySource::new(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"from-replay")],
-        MatchStrategy::MethodPathAndBodyHash,
+        MatchStrategy::MethodUriAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with(
@@ -303,7 +303,7 @@ async fn replay_lookup_uses_redact_request_for_snapshot() {
         a
     };
     let snapshot = make_recorded(Method::GET, "/secure", b"", 200, b"ok");
-    let replay = ReplaySource::new(vec![snapshot], MatchStrategy::MethodPathAndBodyHash);
+    let replay = ReplaySource::new(vec![snapshot], MatchStrategy::MethodUriAndBodyHash);
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with(
             "api",
@@ -341,7 +341,7 @@ async fn replay_records_served_exchanges_when_recording_enabled() {
     };
     let replay = ReplaySource::new(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"replay-body")],
-        MatchStrategy::MethodPathAndBodyHash,
+        MatchStrategy::MethodUriAndBodyHash,
     );
     let cluster = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(10))
