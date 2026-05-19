@@ -40,7 +40,7 @@ pub use command::{Command, CommandResponse, CommandSender};
 pub use config::{
     InboundTlsConfig, Mode, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
 };
-pub use context::RequestContext;
+pub use context::{RequestContext, ResponseSource};
 pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};
 /// Re-export of the JSON-Lines snapshot backend, available when the
 /// `storage-jsonl` feature is on (which it is by default).
