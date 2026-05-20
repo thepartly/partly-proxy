@@ -57,6 +57,8 @@ pub(crate) struct UpstreamRuntime {
     pub replay: Option<ReplaySource>,
     /// What happens on a replay miss — see [`Mode`].
     pub mode: Mode,
+    /// Called when a replay miss occurs to produce the response.
+    pub replay_miss_handler: crate::builder::ReplayMissHandler,
     /// OTEL-only fields. Populated via [`UpstreamRuntime::with_otel`].
     #[cfg(feature = "_otel_any")]
     pub otel: OtelRuntime,
@@ -71,6 +73,7 @@ impl UpstreamRuntime {
         middleware: Vec<SharedMiddleware>,
         replay: Option<ReplaySource>,
         mode: Mode,
+        replay_miss_handler: crate::builder::ReplayMissHandler,
     ) -> Self {
         let (pause, _rx) = watch::channel(false);
         Self {
@@ -82,6 +85,7 @@ impl UpstreamRuntime {
             pause,
             replay,
             mode,
+            replay_miss_handler,
             #[cfg(feature = "_otel_any")]
             otel: OtelRuntime::default(),
         }
@@ -116,6 +120,7 @@ impl UpstreamRuntime {
             Vec::new(),
             None,
             Mode::Record,
+            crate::builder::default_replay_miss_handler(),
         )
     }
 }
