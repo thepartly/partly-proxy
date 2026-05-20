@@ -66,30 +66,11 @@ pub(crate) async fn spawn_listener(
         .map_err(ProxyError::Bind)?;
     let bound_addr = listener.local_addr().map_err(ProxyError::Bind)?;
 
-    // OTEL inputs are read before `spec.config.upstream` is moved into the
-    // Forwarder. `bind_addr`/`scheme` are also captured here so the
-    // listener can populate the OTEL runtime once the socket is bound.
-    #[cfg(feature = "_otel_any")]
-    let otel_runtime = crate::upstream::OtelRuntime {
-        bind_addr: bound_addr,
-        scheme: if spec.config.inbound_tls.is_some() {
-            "https"
-        } else {
-            "http"
-        },
-        extract: spec.config.otel_extract,
-        filter: spec.config.otel_filter.clone(),
-    };
-    #[cfg(feature = "_otel_any")]
-    let propagate_upstream = spec.config.otel_propagate_upstream;
-
     let forwarder = Forwarder::new(spec.config.upstream)?;
-    #[cfg(feature = "_otel_any")]
-    let forwarder = forwarder.with_otel_propagation(propagate_upstream);
     let mut middleware = global_middleware;
     middleware.extend(spec.middleware);
 
-    let runtime = UpstreamRuntime::new(
+    let runtime = Arc::new(UpstreamRuntime::new(
         spec.name,
         forwarder,
         recorder,
@@ -97,10 +78,7 @@ pub(crate) async fn spawn_listener(
         spec.replay,
         spec.mode,
         spec.replay_miss_handler,
-    );
-    #[cfg(feature = "_otel_any")]
-    let runtime = runtime.with_otel(otel_runtime);
-    let runtime = Arc::new(runtime);
+    ));
 
     let task = tokio::spawn(accept_loop(
         listener,
@@ -276,24 +254,16 @@ fn is_fatal_accept(e: &std::io::Error) -> bool {
 async fn handle_request(
     req: Request<Incoming>,
     runtime: Arc<UpstreamRuntime>,
-    peer: SocketAddr,
+    _peer: SocketAddr,
 ) -> std::result::Result<Response<Full<Bytes>>, Infallible> {
-    use tracing::Instrument;
-
     // Lifecycle stage 3: pause gate.
     pause_gate(&runtime).await;
 
     let started = Instant::now();
     let (parts, body) = req.into_parts();
 
-    // Build the OTEL server span before the body is read so it spans the
-    // full inbound processing. Returns `Span::none()` when no `otel_0_*`
-    // feature is on, when `otel_extract` is false for this listener, or
-    // when the per-request filter rejected the request.
-    let span = build_server_span(&parts, peer, &runtime);
-
     let runtime_for_block = runtime.clone();
-    let mut response = async move {
+    let response = async move {
         use http_body_util::BodyExt;
 
         // Lifecycle stage 4: body collection.
@@ -364,60 +334,10 @@ async fn handle_request(
             }
         }
     }
-    .instrument(span.clone())
     .await;
 
-    // Lifecycle stage 9: emit response. With OTEL on, also inject the trace
-    // context into the response headers and record the status on the span.
-    // Both helpers are no-ops when no `otel_0_*` feature is enabled or when
-    // `span` is `Span::none()`.
-    crate::otel::inject_into_response_headers(&span, response.headers_mut());
-    crate::otel::record_response_status(&span, response.status());
     let _ = runtime; // ensure we hold the Arc until response is built
     Ok(response)
-}
-
-/// Build the OTEL server span for an inbound request, or `Span::none()`
-/// when no OTEL feature is enabled, extraction is disabled for this
-/// listener, or the per-request filter rejected the request.
-#[allow(unused_variables)]
-fn build_server_span(
-    parts: &http::request::Parts,
-    peer: SocketAddr,
-    runtime: &UpstreamRuntime,
-) -> tracing::Span {
-    #[cfg(feature = "_otel_any")]
-    {
-        if !runtime.otel.extract {
-            return tracing::Span::none();
-        }
-        if let Some(filter) = &runtime.otel.filter {
-            if !filter(&parts.method, &parts.uri) {
-                return tracing::Span::none();
-            }
-        }
-        let parent = crate::otel::extract_parent_context(&parts.headers);
-        let user_agent = parts
-            .headers
-            .get(http::header::USER_AGENT)
-            .and_then(|v| v.to_str().ok());
-        let span = crate::otel::make_server_span(&crate::otel::ServerSpanInputs {
-            method: &parts.method,
-            uri: &parts.uri,
-            version: parts.version,
-            peer,
-            bind_addr: runtime.otel.bind_addr,
-            scheme: runtime.otel.scheme,
-            user_agent,
-            upstream_name: &runtime.name,
-        });
-        crate::otel::apply_parent(&span, parent);
-        span
-    }
-    #[cfg(not(feature = "_otel_any"))]
-    {
-        tracing::Span::none()
-    }
 }
 
 /// Lifecycle stage 3: block while `runtime.pause` is true.
@@ -468,10 +388,7 @@ impl Terminal for LiveTerminal<'_> {
                     // Stamp before awaiting so the marker is present even
                     // if the forward errors.
                     ctx.insert(ResponseSource::Upstream);
-                    self.runtime
-                        .forwarder
-                        .forward(req, &self.runtime.name)
-                        .await
+                    self.runtime.forwarder.forward(req).await
                 }
             }
         })

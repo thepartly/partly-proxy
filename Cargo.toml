@@ -3,10 +3,10 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/partly/api-proxy"
+repository = "https://github.com/thepartly/api-proxy"
 authors = ["Partly <jo@partly.com>"]
 rust-version = "1.85"
 
@@ -16,9 +16,9 @@ rust-version = "1.85"
 #   - `cargo publish` / `cargo release` use `version` from the registry.
 # Keep these versions in lock-step with `workspace.package.version` above;
 # `release.toml` (shared-version = true) enforces that on release.
-partly-proxy-types = { version = "0.2.0", path = "crates/partly-proxy-types" }
-partly-proxy-storage-jsonl = { version = "0.2.0", path = "crates/partly-proxy-storage-jsonl" }
-partly-proxy-storage-sqlite = { version = "0.2.0", path = "crates/partly-proxy-storage-sqlite" }
+partly-proxy-types = { version = "0.3.0", path = "crates/partly-proxy-types" }
+partly-proxy-storage-jsonl = { version = "0.3.0", path = "crates/partly-proxy-storage-jsonl" }
+partly-proxy-storage-sqlite = { version = "0.3.0", path = "crates/partly-proxy-storage-sqlite" }
 # `partly-proxy-echo` is `publish = false`; only consumed as a dev-dep
 # inside the workspace. Path-only is fine since dev-deps without a
 # version are stripped from the published manifest.
@@ -86,19 +86,6 @@ rcgen = "0.13"
 # Benchmarks. `async_tokio` lets `Criterion::bench_function` drive async
 # bodies via `to_async(&runtime).iter_custom(...)`.
 criterion = { version = "0.5", features = ["async_tokio"] }
-
-# OpenTelemetry — version-suffixed renames so multiple minor versions can
-# coexist in the workspace as the OTEL Rust crates churn. See the proxy
-# lib's `otel_0_*` features. Add a new block per supported minor; do not
-# remove old ones until consumers have migrated.
-opentelemetry_0_27 = { package = "opentelemetry", version = "0.27" }
-opentelemetry-http_0_27 = { package = "opentelemetry-http", version = "0.27" }
-opentelemetry-semantic-conventions_0_27 = { package = "opentelemetry-semantic-conventions", version = "0.27", features = ["semconv_experimental"] }
-tracing-opentelemetry_0_28 = { package = "tracing-opentelemetry", version = "0.28", default-features = false }
-
-# Test-only OTEL SDK for the integration tests' in-memory span exporter.
-# Not pulled in by the lib itself.
-opentelemetry_sdk_0_27 = { package = "opentelemetry_sdk", version = "0.27", features = ["testing"] }
 
 [profile.dev]
 opt-level = 0

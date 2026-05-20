@@ -15,30 +15,6 @@ use crate::{
     replay::ReplaySource, stub::StubStore,
 };
 
-/// OTEL fields cached on the runtime so the request path can build server
-/// spans without re-reading `ProxyConfig`. Only present when an
-/// `otel_0_*` feature is on.
-#[cfg(feature = "_otel_any")]
-#[derive(Clone)]
-pub(crate) struct OtelRuntime {
-    pub bind_addr: std::net::SocketAddr,
-    pub scheme: &'static str,
-    pub extract: bool,
-    pub filter: Option<crate::config::OtelRequestFilter>,
-}
-
-#[cfg(feature = "_otel_any")]
-impl Default for OtelRuntime {
-    fn default() -> Self {
-        Self {
-            bind_addr: "0.0.0.0:0".parse().expect("static addr parses"),
-            scheme: "http",
-            extract: true,
-            filter: None,
-        }
-    }
-}
-
 /// Per-upstream runtime state shared with every accepted connection and with
 /// the command processor.
 pub(crate) struct UpstreamRuntime {
@@ -59,9 +35,6 @@ pub(crate) struct UpstreamRuntime {
     pub mode: Mode,
     /// Called when a replay miss occurs to produce the response.
     pub replay_miss_handler: crate::builder::ReplayMissHandler,
-    /// OTEL-only fields. Populated via [`UpstreamRuntime::with_otel`].
-    #[cfg(feature = "_otel_any")]
-    pub otel: OtelRuntime,
 }
 
 impl UpstreamRuntime {
@@ -86,17 +59,7 @@ impl UpstreamRuntime {
             replay,
             mode,
             replay_miss_handler,
-            #[cfg(feature = "_otel_any")]
-            otel: OtelRuntime::default(),
         }
-    }
-
-    /// Attach the listener-specific OTEL configuration. Called once per
-    /// upstream during `spawn_listener` after the bound address is known.
-    #[cfg(feature = "_otel_any")]
-    pub(crate) fn with_otel(mut self, otel: OtelRuntime) -> Self {
-        self.otel = otel;
-        self
     }
 
     /// Borrow a fresh `pause` receiver — every accept-loop task uses one to
