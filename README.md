@@ -1,5 +1,12 @@
 # partly-proxy
 
+[![CI](https://github.com/thepartly/partly-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/thepartly/partly-proxy/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/partly-proxy-lib.svg)](https://crates.io/crates/partly-proxy-lib)
+[![docs.rs](https://img.shields.io/docsrs/partly-proxy-lib)](https://docs.rs/partly-proxy-lib)
+[![npm](https://img.shields.io/npm/v/@partly/proxy-client.svg)](https://www.npmjs.com/package/@partly/proxy-client)
+[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](https://github.com/thepartly/partly-proxy/blob/main/Cargo.toml)
+![License](https://img.shields.io/crates/l/partly-proxy-lib)
+
 A programmable HTTP/HTTPS proxy library for integration testing. Record real
 upstream traffic, replay it deterministically, inject stubbed responses,
 intercept and modify requests/responses via reqwest-style middleware,

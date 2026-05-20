@@ -36,6 +36,10 @@ similar_names = "allow"
 too_many_lines = "allow"
 struct_field_names = "allow"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 # Shared type surface (SnapshotStorage trait, RecordedExchange, ProxyError).
 # Re-exported under the original module paths via the shim files in

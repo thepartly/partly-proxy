@@ -18,6 +18,10 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 # Depend on the types crate, NOT on partly-proxy-lib — depending on the
 # lib would create a Cargo package-graph cycle since the lib has an
