@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Verify the pushed tag matches every artifact's declared version:
+  # workspace.package.version, each member crate's manifest, and the
+  # ts-client package.json. `shared-version = true` in release.toml is
+  # meant to keep these aligned but doesn't enforce it on `cargo
+  # release` failures or hand-edits, so check defensively.
+  version-check:
+    name: Verify tag matches every artifact version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check all manifest versions match the tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          fail=0
+
+          check() {
+            local label="$1" version="$2"
+            if [ "${version}" != "${tag}" ]; then
+              echo "::error::${label}: '${version}' does not match tag '${tag}'"
+              fail=1
+            else
+              echo "ok  ${label}: ${version}"
+            fi
+          }
+
+          ws=$(awk '/^\[workspace\.package\]/{f=1; next} f && /^version = /{gsub(/"/, "", $3); print $3; exit}' Cargo.toml)
+          check "workspace.package" "${ws}"
+
+          for manifest in crates/*/Cargo.toml; do
+            crate=$(awk -F'"' '/^name = /{print $2; exit}' "${manifest}")
+            # `version.workspace = true` carries the workspace version
+            # and matches by construction; only check explicit values.
+            if grep -Eq '^version = "' "${manifest}"; then
+              v=$(awk -F'"' '/^version = "/{print $2; exit}' "${manifest}")
+              check "${crate}" "${v}"
+            fi
+          done
+
+          tsv=$(awk -F'"' '/"version"/{print $4; exit}' ts-client/package.json)
+          check "ts-client/package.json" "${tsv}"
+
+          exit "${fail}"
+
+  # Publish in dependency order so each crate's verification build can
+  # resolve the previous one from the index. partly-proxy-echo is
+  # publish=false and skipped automatically.
+  publish-crates:
+    name: Publish to crates.io
+    needs: [version-check]
+    runs-on: ubuntu-latest
+    # `environment: release` lets the repo gate this job behind approval
+    # rules and bind crates.io Trusted Publishers to this scope.
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Authenticate to crates.io (OIDC)
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish partly-proxy-types
+        run: cargo publish --package partly-proxy-types
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      # Sparse-index propagation isn't synchronous on publish ack.
+      - name: Wait for index propagation
+        run: sleep 30
+
+      - name: Publish partly-proxy-storage-jsonl
+        run: cargo publish --package partly-proxy-storage-jsonl
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      - name: Wait for index propagation
+        run: sleep 30
+
+      - name: Publish partly-proxy-storage-sqlite
+        run: cargo publish --package partly-proxy-storage-sqlite
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+      - name: Wait for index propagation
+        run: sleep 30
+
+      - name: Publish partly-proxy-lib
+        run: cargo publish --package partly-proxy-lib
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+
+  # Publish @partly/proxy-client to npm with provenance.
+  #
+  # Uses npm's OIDC Trusted Publishing flow (GA Aug 2025) — configure a
+  # Trusted Publisher on npmjs.com for `@partly/proxy-client` bound to
+  # this repo, workflow filename, and the `release` environment. With
+  # that in place `--provenance` issues a Sigstore attestation linking
+  # the published tarball to this workflow run; no NPM_TOKEN secret
+  # required.
+  publish-npm:
+    name: Publish to npm
+    needs: [version-check]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ts-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: ts-client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+
+  # Sequenced after every publish job so the release page never
+  # advertises a version that failed to upload to either registry.
+  github-release:
+    name: Create GitHub release
+    needs: [publish-crates, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --generate-notes walks back to the previous release tag.
+          fetch-depth: 0
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
