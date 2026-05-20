@@ -15,7 +15,6 @@ mod control_plane;
 mod forwarder;
 mod listener;
 pub mod middleware;
-mod otel;
 pub mod proxy_io;
 pub mod recorder;
 pub mod replay;
@@ -23,15 +22,6 @@ pub mod stub;
 mod tls;
 mod upstream;
 pub mod wire;
-
-// Guard: enabling more than one `otel_0_*` feature at a time would link two
-// `opentelemetry` minors into one build. Their `global::*` registries are
-// version-specific, so the propagator a host installs against one would be
-// invisible to the other. Extend the predicate when adding new versions.
-#[cfg(all(feature = "otel_0_27", /* future: feature = "otel_0_28" */ false))]
-compile_error!(
-    "partly-proxy-lib: enable at most one `otel_0_*` feature; they are mutually exclusive"
-);
 
 pub use assertions::TrafficFilter;
 pub use builder::{ProxyClusterBuilder, ReplayMissHandler};

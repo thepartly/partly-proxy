@@ -21,27 +21,6 @@ storage-jsonl = ["dep:partly-proxy-storage-jsonl"]
 storage-sqlite = ["dep:partly-proxy-storage-sqlite"]
 testing = []
 
-# OpenTelemetry support. One feature per `opentelemetry` minor version so
-# the lib can track multiple minors side-by-side as the OTEL Rust stack
-# evolves. Enable at most one at a time — `lib.rs` enforces this with a
-# `compile_error!`.
-#
-# The library does *not* install a tracer provider, propagator, exporter,
-# or `tracing-subscriber`. The host binary is responsible for that. The
-# feature only wires the lib's extraction / injection / span helpers.
-#
-# `_otel_any` is an internal alias enabled by every version feature so
-# cfg gates inside the crate stay version-agnostic. Do not enable it
-# directly.
-_otel_any = []
-otel_0_27 = [
-    "_otel_any",
-    "dep:opentelemetry_0_27",
-    "dep:opentelemetry-http_0_27",
-    "dep:opentelemetry-semantic-conventions_0_27",
-    "dep:tracing-opentelemetry_0_28",
-]
-
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -96,14 +75,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 
-# OpenTelemetry — optional, version-suffixed. The active set is selected
-# by the `otel_0_*` feature flags above. None of these are linked unless
-# a version feature is enabled.
-opentelemetry_0_27 = { workspace = true, optional = true }
-opentelemetry-http_0_27 = { workspace = true, optional = true }
-opentelemetry-semantic-conventions_0_27 = { workspace = true, optional = true }
-tracing-opentelemetry_0_28 = { workspace = true, optional = true }
-
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
@@ -119,12 +90,6 @@ partly-proxy-echo = { workspace = true }
 partly-proxy-storage-jsonl = { workspace = true }
 partly-proxy-storage-sqlite = { workspace = true }
 criterion = { workspace = true }
-
-# Test-only OTEL SDK for the integration tests' in-memory span exporter.
-# `opentelemetry_0_27` itself reaches the test crate through the optional
-# regular dep when the matching feature is enabled, so it isn't repeated
-# here.
-opentelemetry_sdk_0_27 = { workspace = true }
 
 [[example]]
 name = "host"
