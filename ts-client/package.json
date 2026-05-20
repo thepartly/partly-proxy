@@ -1,6 +1,6 @@
 {
   "name": "@partly/proxy-client",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript client for the partly-proxy-lib JSON-Lines TCP control plane",
   "license": "MIT OR Apache-2.0",
   "type": "module",
