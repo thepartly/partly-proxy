@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/partly/api-proxy"
+repository = "https://github.com/thepartly/api-proxy"
 authors = ["Partly <jo@partly.com>"]
 rust-version = "1.85"
 
