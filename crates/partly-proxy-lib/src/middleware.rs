@@ -42,6 +42,14 @@ pub trait ProxyMiddleware: Send + Sync + 'static {
 /// Shared, cheaply-clonable middleware reference.
 pub type SharedMiddleware = Arc<dyn ProxyMiddleware>;
 
+/// Wrap any [`ProxyMiddleware`] in an `Arc` to produce a [`SharedMiddleware`].
+///
+/// Avoids explicit `Arc::new(m)` at every call site when building
+/// per-upstream middleware lists.
+pub fn shared<M: ProxyMiddleware>(m: M) -> SharedMiddleware {
+    Arc::new(m)
+}
+
 /// Boxed future returned by [`Terminal::invoke`].
 pub type TerminalFuture<'a> =
     Pin<Box<dyn std::future::Future<Output = Result<ProxyResponse>> + Send + 'a>>;

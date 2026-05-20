@@ -113,6 +113,10 @@ impl ReplaySource {
 
     /// Stream an NDJSON file line-by-line into a replay source.
     ///
+    /// If the file does not exist an empty [`ReplaySource`] is returned —
+    /// this covers the common case where a snapshots file has not been
+    /// created yet (e.g. first run in record mode).
+    ///
     /// The loader reads one exchange per line and never materialises the
     /// whole file as a single string (per §8.1.1's 100k-exchange scale
     /// target). Each malformed line yields a `ProxyError::Recording`.
@@ -122,7 +126,13 @@ impl ReplaySource {
     /// with whichever backend they prefer.
     #[cfg(feature = "storage-jsonl")]
     pub fn from_jsonl(path: impl AsRef<Path>, strategy: MatchStrategy) -> Result<Self> {
-        let file = std::fs::File::open(path).map_err(ProxyError::Recording)?;
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::new(Vec::new(), strategy));
+            }
+            Err(e) => return Err(ProxyError::Recording(e)),
+        };
         let reader = BufReader::new(file);
         let mut exchanges = Vec::new();
         for (lineno, line) in reader.lines().enumerate() {

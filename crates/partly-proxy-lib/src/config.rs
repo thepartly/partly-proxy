@@ -231,6 +231,20 @@ pub enum Mode {
     Replay,
 }
 
+impl std::str::FromStr for Mode {
+    type Err = partly_proxy_types::ProxyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "record" => Ok(Mode::Record),
+            "replay" => Ok(Mode::Replay),
+            _ => Err(partly_proxy_types::ProxyError::Command(format!(
+                "invalid proxy mode {s:?}: expected \"record\" or \"replay\""
+            ))),
+        }
+    }
+}
+
 /// Outbound TLS settings — see `SPECIFICATION.md` §3.4.
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamTlsConfig {

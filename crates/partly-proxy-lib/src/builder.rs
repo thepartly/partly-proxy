@@ -13,28 +13,59 @@ use std::{
     sync::Arc,
 };
 
+use bytes::Bytes;
+use http::{StatusCode, header::CONTENT_TYPE};
 use partly_proxy_types::{ProxyError, Result, SharedStorage};
 use tokio::sync::watch;
 
 use crate::{
     cluster::{ClusterHandle, RunningUpstream},
     command,
-    config::{Mode, ProxyConfig, RecordingConfig},
+    config::{Mode, ProxyConfig, RecordingConfig, UpstreamTarget},
     control_plane, listener,
     middleware::{ProxyMiddleware, SharedMiddleware},
+    proxy_io::{ProxyRequest, ProxyResponse},
     recorder::Recorder,
     replay::ReplaySource,
     upstream::UpstreamRegistry,
 };
 
+/// Closure invoked when a request in [`Mode::Replay`] finds no matching stub
+/// and no matching snapshot. Receives the unmatched request and returns the
+/// response to send back to the caller.
+pub type ReplayMissHandler = Arc<dyn Fn(ProxyRequest) -> ProxyResponse + Send + Sync>;
+
+pub(crate) fn default_replay_miss_handler() -> ReplayMissHandler {
+    Arc::new(|_req| {
+        ProxyResponse::new(StatusCode::SERVICE_UNAVAILABLE)
+            .with_header(CONTENT_TYPE, Bytes::from_static(b"application/json"))
+            .with_body(Bytes::from_static(b"{}"))
+    })
+}
+
 /// Builder for a [`ClusterHandle`](crate::ClusterHandle).
-#[derive(Default)]
 pub struct ProxyClusterBuilder {
     recording: RecordingConfig,
+    default_mode: Mode,
     upstreams: Vec<UpstreamSpec>,
     global_middleware: Vec<SharedMiddleware>,
     tcp_control_addr: Option<SocketAddr>,
     storage: Option<SharedStorage>,
+    replay_miss_handler: ReplayMissHandler,
+}
+
+impl Default for ProxyClusterBuilder {
+    fn default() -> Self {
+        Self {
+            recording: RecordingConfig::default(),
+            default_mode: Mode::Record,
+            upstreams: Vec::new(),
+            global_middleware: Vec::new(),
+            tcp_control_addr: None,
+            storage: None,
+            replay_miss_handler: default_replay_miss_handler(),
+        }
+    }
 }
 
 impl std::fmt::Debug for ProxyClusterBuilder {
@@ -48,7 +79,7 @@ impl std::fmt::Debug for ProxyClusterBuilder {
             .field("global_middleware", &self.global_middleware.len())
             .field("tcp_control_addr", &self.tcp_control_addr)
             .field("storage", &self.storage.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -59,6 +90,7 @@ pub(crate) struct UpstreamSpec {
     pub middleware: Vec<SharedMiddleware>,
     pub replay: Option<ReplaySource>,
     pub mode: Mode,
+    pub replay_miss_handler: ReplayMissHandler,
 }
 
 impl std::fmt::Debug for UpstreamSpec {
@@ -84,23 +116,53 @@ impl ProxyClusterBuilder {
         self
     }
 
+    /// Set the default mode for all subsequently-added upstreams and update
+    /// the recording config accordingly (`Record` → enabled, `Replay` →
+    /// disabled). Eliminates the need to pass the same mode to every
+    /// `add_upstream_with*` call and to independently configure recording.
+    pub fn default_mode(mut self, mode: Mode) -> Self {
+        self.recording = match mode {
+            Mode::Record => RecordingConfig::default(),
+            Mode::Replay => RecordingConfig::disabled(),
+        };
+        self.default_mode = mode;
+        self
+    }
+
+    /// Override the handler invoked when a request in [`Mode::Replay`] finds
+    /// no matching stub and no matching snapshot. The closure receives the
+    /// unmatched [`ProxyRequest`] and returns the response sent to the caller.
+    ///
+    /// The default handler returns `503 {}` with `Content-Type: application/json`.
+    /// Use this to change the status, body, headers, or trigger a side-effect
+    /// (e.g. a structured log or metric) on miss. Applies to all
+    /// subsequently-added upstreams.
+    pub fn on_replay_miss<F>(mut self, f: F) -> Self
+    where
+        F: Fn(ProxyRequest) -> ProxyResponse + Send + Sync + 'static,
+    {
+        self.replay_miss_handler = Arc::new(f);
+        self
+    }
+
     /// Register an upstream with no per-upstream middleware and no replay
     /// source. Names should be unique; duplicates are surfaced by `run()`.
-    /// Defaults to [`Mode::Record`].
+    /// Uses the builder's current [`default_mode`](Self::default_mode).
     pub fn add_upstream(mut self, name: impl Into<String>, config: ProxyConfig) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware: Vec::new(),
             replay: None,
-            mode: Mode::Record,
+            mode: self.default_mode,
+            replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
         self
     }
 
     /// Register an upstream with a list of per-upstream middleware. The
     /// effective chain for that upstream becomes `global ++ per_upstream`.
-    /// Defaults to [`Mode::Record`].
+    /// Uses the builder's current [`default_mode`](Self::default_mode).
     pub fn add_upstream_with_middleware(
         mut self,
         name: impl Into<String>,
@@ -112,18 +174,20 @@ impl ProxyClusterBuilder {
             config,
             middleware,
             replay: None,
-            mode: Mode::Record,
+            mode: self.default_mode,
+            replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
         self
     }
 
     /// Register an upstream with both per-upstream middleware and an
-    /// optional replay source. Defaults to [`Mode::Record`].
+    /// optional replay source. Uses the builder's current
+    /// [`default_mode`](Self::default_mode).
     ///
     /// See `SPECIFICATION.md` §8.3: in `Record` mode, stubs take priority
     /// over replay, which takes priority over the upstream forward. To
-    /// replay snapshots without ever forwarding to the upstream, use
-    /// [`Self::add_upstream_with_mode`] with [`Mode::Replay`].
+    /// replay snapshots without ever forwarding to the upstream, call
+    /// [`Self::default_mode`] with [`Mode::Replay`] first.
     pub fn add_upstream_with(
         mut self,
         name: impl Into<String>,
@@ -136,17 +200,20 @@ impl ProxyClusterBuilder {
             config,
             middleware,
             replay,
-            mode: Mode::Record,
+            mode: self.default_mode,
+            replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
         self
     }
 
-    /// Register an upstream with an explicit [`Mode`].
+    /// Register an upstream with an explicit [`Mode`], overriding
+    /// [`default_mode`](Self::default_mode) for this entry.
     ///
     /// In [`Mode::Replay`] the terminal never forwards to the upstream — a
-    /// missing snapshot yields a `503 {}` response. In [`Mode::Record`] the
-    /// terminal falls through to the upstream on miss and (when recording
-    /// is enabled) appends the exchange to the recorder.
+    /// missing snapshot yields the replay-miss response (default `503 {}`).
+    /// In [`Mode::Record`] the terminal falls through to the upstream on
+    /// miss and (when recording is enabled) appends the exchange to the
+    /// recorder.
     pub fn add_upstream_with_mode(
         mut self,
         name: impl Into<String>,
@@ -161,6 +228,32 @@ impl ProxyClusterBuilder {
             middleware,
             replay,
             mode,
+            replay_miss_handler: Arc::clone(&self.replay_miss_handler),
+        });
+        self
+    }
+
+    /// Register a stub — an upstream that never forwards to a real backend.
+    /// All requests are handled by `middleware`; anything that falls through
+    /// the chain invokes the replay-miss handler (default `503 {}`).
+    ///
+    /// Equivalent to `add_upstream_with_mode` with a dummy upstream target
+    /// and `Mode::Replay`, but without requiring callers to supply a
+    /// `ProxyConfig` with a meaningless upstream URL.
+    pub fn add_stub(
+        mut self,
+        name: impl Into<String>,
+        bind_addr: SocketAddr,
+        middleware: Vec<SharedMiddleware>,
+    ) -> Self {
+        let config = ProxyConfig::http(bind_addr, UpstreamTarget::new("http://stub.internal:0"));
+        self.upstreams.push(UpstreamSpec {
+            name: name.into(),
+            config,
+            middleware,
+            replay: None,
+            mode: Mode::Replay,
+            replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
         self
     }

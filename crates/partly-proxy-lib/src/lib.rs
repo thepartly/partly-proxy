@@ -34,14 +34,14 @@ compile_error!(
 );
 
 pub use assertions::TrafficFilter;
-pub use builder::ProxyClusterBuilder;
+pub use builder::{ProxyClusterBuilder, ReplayMissHandler};
 pub use cluster::ClusterHandle;
 pub use command::{Command, CommandResponse, CommandSender};
 pub use config::{
     InboundTlsConfig, Mode, ProxyConfig, RecordingConfig, UpstreamTarget, UpstreamTlsConfig,
 };
 pub use context::{RequestContext, ResponseSource};
-pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture};
+pub use middleware::{Next, ProxyMiddleware, SharedMiddleware, Terminal, TerminalFuture, shared};
 /// Re-export of the JSON-Lines snapshot backend, available when the
 /// `storage-jsonl` feature is on (which it is by default).
 #[cfg(feature = "storage-jsonl")]

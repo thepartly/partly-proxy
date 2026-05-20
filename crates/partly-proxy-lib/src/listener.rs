@@ -96,6 +96,7 @@ pub(crate) async fn spawn_listener(
         middleware,
         spec.replay,
         spec.mode,
+        spec.replay_miss_handler,
     );
     #[cfg(feature = "_otel_any")]
     let runtime = runtime.with_otel(otel_runtime);
@@ -461,7 +462,7 @@ impl Terminal for LiveTerminal<'_> {
             match self.runtime.mode {
                 Mode::Replay => {
                     ctx.insert(ResponseSource::ReplayMiss);
-                    Ok(replay_miss_response())
+                    Ok((self.runtime.replay_miss_handler)(req))
                 }
                 Mode::Record => {
                     // Stamp before awaiting so the marker is present even
@@ -474,22 +475,6 @@ impl Terminal for LiveTerminal<'_> {
                 }
             }
         })
-    }
-}
-
-/// `503` response served when a request in [`Mode::Replay`] finds no
-/// matching stub and no matching snapshot — the proxy must not forward.
-fn replay_miss_response() -> ProxyResponse {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    ProxyResponse {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        headers,
-        body: Bytes::from_static(b"{}"),
-        version: Version::HTTP_11,
     }
 }
 
