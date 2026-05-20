@@ -79,7 +79,7 @@ impl std::fmt::Debug for ProxyClusterBuilder {
             .field("global_middleware", &self.global_middleware.len())
             .field("tcp_control_addr", &self.tcp_control_addr)
             .field("storage", &self.storage.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

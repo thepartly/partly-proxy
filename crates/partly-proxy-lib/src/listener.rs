@@ -478,7 +478,6 @@ impl Terminal for LiveTerminal<'_> {
     }
 }
 
-
 fn into_hyper(resp: ProxyResponse) -> Response<Full<Bytes>> {
     let mut builder = Response::builder()
         .status(resp.status)

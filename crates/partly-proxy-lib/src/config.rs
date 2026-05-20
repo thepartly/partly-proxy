@@ -239,8 +239,7 @@ impl std::str::FromStr for Mode {
             "record" => Ok(Mode::Record),
             "replay" => Ok(Mode::Replay),
             _ => Err(partly_proxy_types::ProxyError::Command(format!(
-                "invalid proxy mode {:?}: expected \"record\" or \"replay\"",
-                s
+                "invalid proxy mode {s:?}: expected \"record\" or \"replay\""
             ))),
         }
     }
