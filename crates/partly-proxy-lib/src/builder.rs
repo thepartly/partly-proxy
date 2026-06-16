@@ -26,7 +26,7 @@ use crate::{
     middleware::{ProxyMiddleware, SharedMiddleware},
     proxy_io::{ProxyRequest, ProxyResponse},
     recorder::Recorder,
-    replay::Snapshots,
+    replay::ReplaySource,
     upstream::UpstreamRegistry,
 };
 
@@ -85,9 +85,9 @@ pub(crate) struct UpstreamSpec {
     pub name: String,
     pub config: ProxyConfig,
     pub middleware: Vec<SharedMiddleware>,
-    /// Per-upstream snapshot medium — loaded for replay and (in `Record`)
+    /// Per-upstream storage backend — loaded for replay and (in `Record`)
     /// appended to as the recording sink. Resolved at `run()`.
-    pub snapshots: Option<Snapshots>,
+    pub storage: Option<SharedStorage>,
     pub mode: Mode,
     pub replay_miss_handler: ReplayMissHandler,
 }
@@ -97,7 +97,7 @@ impl std::fmt::Debug for UpstreamSpec {
         f.debug_struct("UpstreamSpec")
             .field("name", &self.name)
             .field("middleware", &self.middleware.len())
-            .field("snapshots", &self.snapshots.is_some())
+            .field("storage", &self.storage.is_some())
             .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
@@ -152,7 +152,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware: Vec::new(),
-            snapshots: None,
+            storage: None,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -172,7 +172,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware,
-            snapshots: None,
+            storage: None,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -180,14 +180,17 @@ impl ProxyClusterBuilder {
     }
 
     /// Register an upstream with both per-upstream middleware and an
-    /// optional [`Snapshots`] medium. Uses the builder's current
-    /// [`default_mode`](Self::default_mode).
+    /// optional [`SnapshotStorage`](crate::SnapshotStorage) backend. Uses the
+    /// builder's current [`default_mode`](Self::default_mode).
     ///
-    /// The `snapshots` medium is the single per-upstream storage knob: at
+    /// The `storage` backend is the single per-upstream storage knob: at
     /// [`run()`](Self::run) its existing contents are loaded into the replay
     /// source, and in [`Mode::Record`] every new exchange for this upstream
-    /// is appended back to it. Give each upstream its own medium (e.g. its
-    /// own JSONL file) to keep recordings separate.
+    /// is appended back to it. Construct a backend
+    /// (e.g. `JsonlStorage::open(path)` or
+    /// [`InMemoryStorage`](crate::InMemoryStorage)), wrap it in an `Arc`, and
+    /// pass it here. Give each upstream its own backend to keep recordings
+    /// separate.
     ///
     /// See `SPECIFICATION.md` §8.3: in `Record` mode, stubs take priority
     /// over replay, which takes priority over the upstream forward. To
@@ -198,13 +201,13 @@ impl ProxyClusterBuilder {
         name: impl Into<String>,
         config: ProxyConfig,
         middleware: Vec<SharedMiddleware>,
-        snapshots: Option<Snapshots>,
+        storage: Option<SharedStorage>,
     ) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware,
-            snapshots,
+            storage,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -218,20 +221,20 @@ impl ProxyClusterBuilder {
     /// missing snapshot yields the replay-miss response (default `503 {}`).
     /// In [`Mode::Record`] the terminal falls through to the upstream on
     /// miss and (when recording is enabled) appends the exchange to the
-    /// upstream's [`Snapshots`] medium.
+    /// upstream's `storage` backend.
     pub fn add_upstream_with_mode(
         mut self,
         name: impl Into<String>,
         config: ProxyConfig,
         middleware: Vec<SharedMiddleware>,
-        snapshots: Option<Snapshots>,
+        storage: Option<SharedStorage>,
         mode: Mode,
     ) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware,
-            snapshots,
+            storage,
             mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -256,7 +259,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware,
-            snapshots: None,
+            storage: None,
             mode: Mode::Replay,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -321,20 +324,19 @@ impl ProxyClusterBuilder {
             }
         }
 
-        // Resolve each upstream's snapshot medium up front: load its
-        // contents into a replay source for the hot path, and collect the
-        // durable media into a per-upstream routing map for the recorder.
-        // Loading is async (it streams the backend), so it happens here in
-        // `run()` rather than in the synchronous `add_upstream_*` builders.
+        // Resolve each upstream's storage backend up front: load its
+        // contents into a replay source for the hot path, and register the
+        // backend in a per-upstream routing map so the recorder appends new
+        // exchanges back to it. Loading is async (it streams the backend),
+        // so it happens here in `run()` rather than in the synchronous
+        // `add_upstream_*` builders.
         let mut routes: HashMap<String, SharedStorage> = HashMap::new();
         let mut resolved = Vec::with_capacity(self.upstreams.len());
         for mut spec in self.upstreams {
-            let replay = match spec.snapshots.take() {
-                Some(snapshots) => {
-                    let (replay, storage) = snapshots.resolve().await?;
-                    if let Some(storage) = storage {
-                        routes.insert(spec.name.clone(), storage);
-                    }
+            let replay = match spec.storage.take() {
+                Some(storage) => {
+                    let replay = ReplaySource::from_storage(storage.as_ref()).await?;
+                    routes.insert(spec.name.clone(), storage);
                     Some(replay)
                 }
                 None => None,

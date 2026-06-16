@@ -22,8 +22,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use partly_proxy_lib::{
-    ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, Snapshots,
-    UpstreamTarget,
+    ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, UpstreamTarget,
 };
 
 #[tokio::main]
@@ -51,11 +50,11 @@ async fn main() -> Result<()> {
     // Storage is configured per upstream: the same medium is loaded for
     // replay and appended to while recording. Here the single "upstream"
     // gets its own JSONL file when PARTLY_PROXY_RECORDING_PATH is set.
-    let snapshots: Option<Snapshots> = match std::env::var("PARTLY_PROXY_RECORDING_PATH").ok() {
+    let snapshots: Option<SharedStorage> = match std::env::var("PARTLY_PROXY_RECORDING_PATH").ok() {
         Some(path) => {
             let storage: SharedStorage =
                 Arc::new(partly_proxy_lib::jsonl::JsonlStorage::open(path).await?);
-            Some(Snapshots::from_storage(storage))
+            Some(storage)
         }
         None => None,
     };

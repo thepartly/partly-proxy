@@ -20,8 +20,7 @@ use hyper_util::{
 };
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, ProxyClusterBuilder, ProxyConfig, RecordingConfig, SharedStorage, Snapshots,
-    UpstreamTarget,
+    ClusterHandle, ProxyClusterBuilder, ProxyConfig, RecordingConfig, SharedStorage, UpstreamTarget,
 };
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
@@ -135,7 +134,7 @@ pub async fn spawn_proxy(recording: Recording) -> ProxyHandle {
         max_in_memory: 10_000,
     };
 
-    let snapshots = storage.map(Snapshots::from_storage);
+    let snapshots = storage;
     let builder = ProxyClusterBuilder::new().recording(cfg).add_upstream_with(
         "upstream",
         ProxyConfig::http(

@@ -41,11 +41,10 @@ pub use partly_proxy_storage_jsonl as jsonl;
 #[cfg(feature = "storage-sqlite")]
 pub use partly_proxy_storage_sqlite as sqlite;
 pub use partly_proxy_types::{
-    ExchangeOutcome, ProxyError, RecordedExchange, RecordedRequest, RecordedResponse, Result,
-    SharedStorage, SnapshotStorage,
+    ExchangeOutcome, InMemoryStorage, ProxyError, RecordedExchange, RecordedRequest,
+    RecordedResponse, Result, SharedStorage, SnapshotStorage,
 };
 pub use proxy_io::{ProxyRequest, ProxyResponse};
 pub use recorder::Recorder;
-pub use replay::{ReplaySource, Snapshots};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};

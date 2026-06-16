@@ -2,46 +2,14 @@
 //!
 //! Any crate can implement [`SnapshotStorage`]; the trait surface uses
 //! only types from this crate, so backends don't need `partly-proxy-lib`.
-//! First-party backends: `partly-proxy-storage-jsonl`,
-//! `partly-proxy-storage-sqlite`.
-//!
-//! # Example
-//!
-//! ```
-//! use std::sync::Mutex;
-//!
-//! use async_trait::async_trait;
-//! use partly_proxy_types::storage::{BoxStream, SnapshotStorage};
-//! use partly_proxy_types::{RecordedExchange, Result};
-//!
-//! #[derive(Debug, Default)]
-//! pub struct InMemoryStorage {
-//!     exchanges: Mutex<Vec<RecordedExchange>>,
-//! }
-//!
-//! #[async_trait]
-//! impl SnapshotStorage for InMemoryStorage {
-//!     async fn append(&self, exchange: &RecordedExchange) -> Result<()> {
-//!         self.exchanges.lock().unwrap().push(exchange.clone());
-//!         Ok(())
-//!     }
-//!
-//!     async fn flush(&self) -> Result<()> {
-//!         Ok(())
-//!     }
-//!
-//!     fn load(&self) -> BoxStream<'_, Result<RecordedExchange>> {
-//!         let snapshot = self.exchanges.lock().unwrap().clone();
-//!         Box::pin(futures::stream::iter(snapshot.into_iter().map(Ok)))
-//!     }
-//! }
-//! ```
+//! First-party backends: [`InMemoryStorage`] (in this crate),
+//! `partly-proxy-storage-jsonl`, `partly-proxy-storage-sqlite`.
 //!
 //! Backends can opt into the shared conformance battery by enabling the
 //! `testing` Cargo feature and calling
 //! [`testing::run_conformance`](crate::testing::run_conformance).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 // Re-exported so implementers don't have to add `futures` themselves.
@@ -72,3 +40,55 @@ pub trait SnapshotStorage: Send + Sync + std::fmt::Debug {
 
 /// Cheap-to-clone handle on a [`SnapshotStorage`].
 pub type SharedStorage = Arc<dyn SnapshotStorage>;
+
+/// In-memory [`SnapshotStorage`] backed by a `Mutex<Vec<_>>`.
+///
+/// The zero-dependency backend for replay-only fixtures and tests that
+/// don't want to touch the filesystem: seed it from a list of exchanges,
+/// wrap it in an `Arc`, and attach it to an upstream. `load()` replays the
+/// seeded exchanges; `append()` keeps any newly recorded ones in the same
+/// vec (so it round-trips like a file would).
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use partly_proxy_types::{InMemoryStorage, SharedStorage};
+///
+/// let store: SharedStorage = Arc::new(InMemoryStorage::from(vec![/* exchanges */]));
+/// ```
+#[derive(Debug, Default)]
+pub struct InMemoryStorage {
+    exchanges: Mutex<Vec<RecordedExchange>>,
+}
+
+impl InMemoryStorage {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl From<Vec<RecordedExchange>> for InMemoryStorage {
+    fn from(exchanges: Vec<RecordedExchange>) -> Self {
+        Self {
+            exchanges: Mutex::new(exchanges),
+        }
+    }
+}
+
+#[async_trait]
+impl SnapshotStorage for InMemoryStorage {
+    async fn append(&self, exchange: &RecordedExchange) -> Result<()> {
+        self.exchanges.lock().unwrap().push(exchange.clone());
+        Ok(())
+    }
+
+    async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn load(&self) -> ExchangeStream<'_> {
+        let snapshot = self.exchanges.lock().unwrap().clone();
+        Box::pin(futures::stream::iter(snapshot.into_iter().map(Ok)))
+    }
+}

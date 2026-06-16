@@ -79,7 +79,7 @@ Scheme is auto-detected from `base_url` — HTTP and HTTPS upstreams use the sam
 | `enabled: bool` | `true` | Whether exchanges are recorded |
 | `max_in_memory: usize` | `10_000` | Cap for the in-memory ring buffer (FIFO eviction) |
 
-`RecordingConfig` controls only the cluster-wide in-memory ring (the `enabled` flag and the `max_in_memory` cap that backs the assertion/query API). Durable persistence — NDJSON file, SQLite database, or anything else implementing `SnapshotStorage` — is configured **per upstream** by attaching a `Snapshots` medium when the upstream is registered (`add_upstream_with` / `add_upstream_with_mode`); see §9.1. Keeping the recording cap separate from the storage backend keeps both axes independent, and making storage per-upstream lets each upstream record to (and replay from) its own file.
+`RecordingConfig` controls only the cluster-wide in-memory ring (the `enabled` flag and the `max_in_memory` cap that backs the assertion/query API). Durable persistence — NDJSON file, SQLite database, in-memory (`InMemoryStorage`), or anything else implementing `SnapshotStorage` — is configured **per upstream** by attaching a storage backend when the upstream is registered (`add_upstream_with` / `add_upstream_with_mode`); see §9.1. Keeping the recording cap separate from the storage backend keeps both axes independent, and making storage per-upstream lets each upstream record to (and replay from) its own backend.
 
 ### 3.4 `UpstreamTlsConfig`
 
@@ -106,20 +106,24 @@ One certificate per listener; no SNI multiplexing.
 Everything is built through `ProxyClusterBuilder`:
 
 ```rust
+// Each upstream attaches its own SnapshotStorage backend (Arc-wrapped).
+let legacy_store: SharedStorage = Arc::new(JsonlStorage::open("legacy.ndjson").await?);
+let frozen_store: SharedStorage = Arc::new(JsonlStorage::open("frozen.ndjson").await?);
+
 let cluster = ProxyClusterBuilder::new()
     .recording(RecordingConfig { /* … */ })
     .add_middleware(GlobalAuthMiddleware)                  // applies to all upstreams
-    .add_upstream("api", api_config)                       // no middleware, no snapshots
+    .add_upstream("api", api_config)                       // no middleware, no storage
     .add_upstream_with_middleware("billing", b_cfg, b_mw)  // per-upstream middleware
-    // A per-upstream snapshot medium: loaded for replay AND appended to while recording.
-    .add_upstream_with("legacy", l_cfg, l_mw, Some(Snapshots::from_storage(legacy_store, strategy)))
+    // A per-upstream storage backend: loaded for replay AND appended to while recording.
+    .add_upstream_with("legacy", l_cfg, l_mw, Some(legacy_store))
     // For deterministic playback against a snapshot file (no upstream dial):
-    .add_upstream_with_mode("frozen", f_cfg, f_mw, Some(Snapshots::from_storage(frozen_store, strategy)), Mode::Replay)
+    .add_upstream_with_mode("frozen", f_cfg, f_mw, Some(frozen_store), Mode::Replay)
     .run()
     .await?;
 ```
 
-The `Snapshots` medium handed to an upstream drives both directions of the record/replay round-trip: at `run()` its existing contents are loaded and indexed into a replay source, and in `Mode::Record` every served exchange for that upstream is appended back to the same medium. There is no cluster-wide storage setter — give each upstream its own medium to keep recordings separate. Use `Snapshots::in_memory(exchanges, strategy)` for a replay-only source that is never written back.
+The storage backend handed to an upstream drives both directions of the record/replay round-trip: at `run()` its existing contents (via `SnapshotStorage::load`) are loaded and indexed into an internal replay source, and in `Mode::Record` every served exchange for that upstream is appended back to the same backend. There is no cluster-wide storage setter — give each upstream its own backend to keep recordings separate. Use `InMemoryStorage` (seeded from a `Vec<RecordedExchange>`) for a filesystem-free replay/fixture backend.
 
 `run()` binds every listener, starts a shared recorder and command processor, and returns a `ClusterHandle` exposing:
 
@@ -139,7 +143,7 @@ Assertions are not exposed as a Rust API. They are driven exclusively through th
 | Command channel and processor | Middleware chain (global middleware + that upstream's middleware, in that order) |
 | Global middleware | Active stubs |
 | | Pause flag and resume signal |
-| | Optional `Snapshots` medium (replay source + durable recording sink) |
+| | Optional `SnapshotStorage` backend (replay source + durable recording sink) |
 | | Optional inbound TLS acceptor |
 
 The recorder's in-memory ring is cluster-wide (it backs the assertion/query API, which filters by upstream). Durable storage, by contrast, is per upstream: the recorder routes each exchange to the medium registered for its upstream name, so every upstream persists to its own file.
@@ -388,15 +392,19 @@ A stub matches a request when **all** of the following hold (any unset field is 
 
 ## 8. Replay
 
-A `ReplaySource` is an immutable snapshot of recorded exchanges, indexed for O(1) lookup:
+Replay is configured by attaching a `SnapshotStorage` backend to an upstream (§3.3, §4) — there is no caller-facing replay type. At `run()` the cluster drains the backend's `load()` stream into an internal, immutable replay index (keyed for O(1) lookup, §8.1) and registers the same backend as the upstream's recording sink, so one backend drives both directions of the round-trip:
 
 ```rust
-let replay = ReplaySource::new(exchanges);
-// or
-let replay = ReplaySource::from_jsonl(path)?;
+// durable: records to and replays from the same NDJSON file
+let store: SharedStorage = Arc::new(JsonlStorage::open(path).await?);
+.add_upstream_with("api", cfg, mw, Some(store))
+
+// filesystem-free replay/fixture backend
+let store: SharedStorage = Arc::new(InMemoryStorage::from(exchanges));
+.add_upstream_with("api", cfg, mw, Some(store))
 ```
 
-Upstreams do not take a `ReplaySource` directly. Instead they take a `Snapshots` medium (§3.3, §4): `Snapshots::from_storage(store)` loads the source from a durable backend at `run()` *and* registers that backend as the upstream's recording sink, while `Snapshots::in_memory(exchanges)` wraps an in-memory list for replay-only use. The loaded source is consulted on the hot path exactly as described below.
+The loaded index is consulted on the hot path exactly as described below.
 
 ### 8.1 Match key
 
@@ -415,7 +423,7 @@ Coarser keys (method-only, method+path), normalised variants (query-parameter ca
 
 Replay must remain usable with snapshot files containing **10,000 to 100,000 exchanges** — these are realistic sizes for a recorded end-to-end suite, not a worst case to be discouraged. Concretely:
 
-- `ReplaySource::from_jsonl(...)` parses a 100k-line file in a single pass; it does not hold the whole file in a `String` and must stream line-by-line (e.g. `BufReader::lines`) to keep peak memory bounded by the largest single exchange, not the file size.
+- Loading a backend at `run()` drains its `load()` stream in a single pass; a file-backed `SnapshotStorage` (e.g. NDJSON) must stream line-by-line rather than hold the whole file in a `String`, keeping peak memory bounded by the largest single exchange, not the file size.
 - Index construction is O(n) in the number of exchanges; lookup remains O(1) per request regardless of snapshot size. Hash-map capacity should be preallocated from the exchange count to avoid repeated rehashing during load.
 - Memory budget at 100k exchanges with typical JSON payloads (~1–4 KiB body each) is on the order of hundreds of MiB. The proxy keeps decoded `Bytes` bodies in the source verbatim — there is no per-exchange duplication into the recorder unless `Replay + recording` is enabled.
 
@@ -454,15 +462,15 @@ The builder defaults to `Mode::Record` (`add_upstream`, `add_upstream_with_middl
 - `RecordedResponse`: status, headers, body bytes.
 - `RecordedExchange`: unique id, optional `upstream` name (set in cluster mode), timestamp, duration, request, **either** a response or an error string, and a string-keyed `labels` map for caller-supplied metadata.
 
-Bodies serialise as base64 in JSON; the NDJSON format is round-trippable into a `ReplaySource`.
+Bodies serialise as base64 in JSON; the NDJSON format round-trips — a file recorded in one run loads back as the replay index in the next.
 
 A single recording session can produce **10,000 to 100,000 exchanges** in one NDJSON file — long-running end-to-end suites realistically generate this volume — and the format must remain usable at that scale. Concretely:
 
 - The on-disk format is strictly one exchange per line, append-only. Loading a 100k-exchange file is a single streaming pass (no whole-file parse, no JSON-array wrapper).
 - Storage writes are append-only and per-exchange — a long suite never rewrites earlier lines, so the file grows linearly and is safe to truncate or `tail -f` mid-run.
-- Round-tripping a 100k-line NDJSON file into a `ReplaySource` is supported and exercised; see §8.1.1 for the loader's complexity properties.
+- Round-tripping a 100k-line NDJSON file back into the replay index is supported and exercised; see §8.1.1 for the loader's complexity properties.
 
-Durable storage is attached per upstream via a `Snapshots` medium (§3.3, §4); the recorder holds a map from upstream name to its `SnapshotStorage` backend and appends each exchange to the medium registered for its `upstream`. Exchanges whose upstream has no attached medium (or no name) are kept in the in-memory ring only.
+Durable storage is attached per upstream as a `SnapshotStorage` backend (§3.3, §4); the recorder holds a map from upstream name to its backend and appends each exchange to the backend registered for its `upstream`. Exchanges whose upstream has no attached backend (or no name) are kept in the in-memory ring only.
 
 ### 9.2 Recorder API
 
@@ -660,11 +668,11 @@ The crate does not ship a hosting binary — wiring `ProxyClusterBuilder` into a
 
 ### 20.1 Record once, replay forever
 
-1. Register the upstream in `Mode::Record` with a `Snapshots::from_storage(jsonl, strategy)` medium pointing at a fresh NDJSON file.
+1. Register the upstream in `Mode::Record`, attaching a JSONL `SnapshotStorage` backend (`JsonlStorage::open`) pointing at a fresh NDJSON file.
 2. Drive the system under test against the proxy. Real upstream traffic accumulates in that file.
-3. In future test runs, register the same upstream in `Mode::Replay` with a `Snapshots::from_storage` medium pointing at the same file. The medium is loaded into the replay source at `run()`; the real upstream is no longer needed.
+3. In future test runs, register the same upstream in `Mode::Replay` with a backend pointing at the same file. The backend is loaded into the replay index at `run()`; the real upstream is no longer needed.
 
-Because the medium is the same in both directions, a re-run in `Mode::Record` replays any request already in the file rather than re-recording it (the snapshot acts as a deduplicating cache, §8.3) and only forwards genuinely new requests. Delete the file to force a clean re-capture.
+Because the backend is the same in both directions, a re-run in `Mode::Record` replays any request already in the file rather than re-recording it (the snapshot acts as a deduplicating cache, §8.3) and only forwards genuinely new requests. Delete the file to force a clean re-capture.
 
 ### 20.2 Ad-hoc mock for a single test
 

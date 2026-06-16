@@ -96,7 +96,7 @@ impl Default for UpstreamTarget {
 /// Controls the recorder's in-memory ring buffer only. Persistence —
 /// NDJSON file, `SQLite` database, or anything else implementing
 /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured per
-/// upstream by attaching a [`Snapshots`](crate::Snapshots) medium via
+/// upstream by attaching a storage backend via
 /// [`ProxyClusterBuilder::add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with).
 #[derive(Debug, Clone)]
 pub struct RecordingConfig {
@@ -139,9 +139,9 @@ impl RecordingConfig {
 /// and no replay hit:
 ///
 /// - [`Mode::Record`] forwards to the upstream and records the exchange.
-///   When a [`ReplaySource`](crate::ReplaySource) is also configured, replay
-///   hits short-circuit before the forward (so previously-seen requests
-///   don't re-hit the upstream).
+///   When a storage backend is also attached, replay hits short-circuit
+///   before the forward (so previously-seen requests don't re-hit the
+///   upstream).
 /// - [`Mode::Replay`] never touches the upstream. A miss yields a `503` with
 ///   an empty-JSON-object body (`{}`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

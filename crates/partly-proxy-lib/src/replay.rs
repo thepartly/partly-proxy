@@ -1,29 +1,28 @@
 //! Replay source — see `SPECIFICATION.md` §8.
 //!
-//! A `ReplaySource` is an immutable bundle of recorded exchanges indexed
-//! for O(1) lookup. The lookup key is `(method, origin-form URI (path +
-//! query string), body SHA-256)`, built once at construction (§8.1).
+//! `ReplaySource` is a crate-internal, immutable bundle of recorded
+//! exchanges indexed for O(1) lookup. The lookup key is `(method,
+//! origin-form URI (path + query string), body SHA-256)`, built once at
+//! construction (§8.1).
+//!
+//! It is not part of the public API: callers attach a
+//! [`SnapshotStorage`](crate::SnapshotStorage) backend to an upstream
+//! (e.g. `JsonlStorage` or [`InMemoryStorage`](crate::InMemoryStorage)),
+//! and the cluster builds the `ReplaySource` from that backend's `load()`
+//! stream at `run()`.
 //!
 //! Lookups go through every middleware's `redact_request_for_snapshot`
 //! before the lookup key is computed (§8.2.1), so a request that carried
 //! a live `Authorization` header still matches a snapshot recorded with
 //! that header stripped.
 
-// Only `from_jsonl` uses these — gate them so `--no-default-features`
-// builds don't trip an unused-import warning.
-#[cfg(feature = "storage-jsonl")]
-use std::io::{BufRead, BufReader};
-#[cfg(feature = "storage-jsonl")]
-use std::path::Path;
 use std::{collections::HashMap, sync::Arc};
 
-// `ProxyError` is only constructed by the JSONL loader path (and the
-// from_storage tests). Gate the import accordingly to keep
-// --no-default-features warning-free.
-#[cfg(any(test, feature = "storage-jsonl"))]
+// `ProxyError` is only constructed in the storage-error test below.
+#[cfg(test)]
 use partly_proxy_types::ProxyError;
 use partly_proxy_types::{
-    ExchangeOutcome, RecordedExchange, Result, SharedStorage, SnapshotStorage, hash::sha256_hex,
+    ExchangeOutcome, RecordedExchange, Result, SnapshotStorage, hash::sha256_hex,
 };
 
 use crate::{
@@ -31,75 +30,14 @@ use crate::{
     proxy_io::{ProxyRequest, ProxyResponse},
 };
 
-/// Per-upstream snapshot medium handed to
-/// [`add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with).
-///
-/// A single `Snapshots` drives both ends of the record/replay round-trip.
-/// At cluster [`run()`](crate::ProxyClusterBuilder::run) its existing
-/// contents are loaded and indexed into a [`ReplaySource`]; in
-/// [`Mode::Record`](crate::Mode) every new exchange for that upstream is
-/// appended back to the same medium. There is no separate cluster-wide
-/// storage knob — recording is configured per upstream, here.
-pub struct Snapshots {
-    source: SnapshotsSource,
-}
-
-enum SnapshotsSource {
-    /// Durable medium — loaded for replay, appended to while recording.
-    Storage(SharedStorage),
-    /// In-memory exchanges — replay only, never recorded back. Handy for
-    /// tests and fixtures that don't want to touch the filesystem.
-    InMemory(Vec<RecordedExchange>),
-}
-
-impl Snapshots {
-    /// Use a durable [`SharedStorage`] medium (e.g. a JSONL file) as both
-    /// the replay source and the recording sink for this upstream.
-    pub fn from_storage(storage: SharedStorage) -> Self {
-        Self {
-            source: SnapshotsSource::Storage(storage),
-        }
-    }
-
-    /// Use an in-memory list of exchanges as a replay-only source. Nothing
-    /// recorded at runtime is written back — the medium is read-only.
-    pub fn in_memory(exchanges: Vec<RecordedExchange>) -> Self {
-        Self {
-            source: SnapshotsSource::InMemory(exchanges),
-        }
-    }
-
-    /// Resolve into the replay source consulted on the hot path and, for a
-    /// durable medium, the storage handle to register as the upstream's
-    /// recording sink. Called once per upstream at cluster `run()`.
-    pub(crate) async fn resolve(self) -> Result<(ReplaySource, Option<SharedStorage>)> {
-        match self.source {
-            SnapshotsSource::Storage(storage) => {
-                let replay = ReplaySource::from_storage(storage.as_ref()).await?;
-                Ok((replay, Some(storage)))
-            }
-            SnapshotsSource::InMemory(exchanges) => Ok((ReplaySource::new(exchanges), None)),
-        }
-    }
-}
-
-impl std::fmt::Debug for Snapshots {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind = match &self.source {
-            SnapshotsSource::Storage(_) => "Storage",
-            SnapshotsSource::InMemory(_) => "InMemory",
-        };
-        f.debug_struct("Snapshots").field("source", &kind).finish()
-    }
-}
-
 /// Lookup key: (method, path+query, body sha-256 hex).
 type IndexKey = (String, String, String);
 
 /// Cheap-to-clone replay source. Behind an `Arc`, so several listeners can
-/// share one source.
+/// share one source. Crate-internal — built from an attached
+/// [`SnapshotStorage`] at cluster `run()`, never constructed by callers.
 #[derive(Clone)]
-pub struct ReplaySource {
+pub(crate) struct ReplaySource {
     inner: Arc<ReplaySourceInner>,
 }
 
@@ -122,59 +60,20 @@ impl std::fmt::Debug for ReplaySource {
 
 impl ReplaySource {
     /// Build a replay source from an in-memory list of exchanges.
-    pub fn new(exchanges: Vec<RecordedExchange>) -> Self {
+    pub(crate) fn new(exchanges: Vec<RecordedExchange>) -> Self {
         let index = build_index(&exchanges);
         Self {
             inner: Arc::new(ReplaySourceInner { exchanges, index }),
         }
     }
 
-    /// Stream an NDJSON file line-by-line into a replay source.
-    ///
-    /// If the file does not exist an empty [`ReplaySource`] is returned —
-    /// this covers the common case where a snapshots file has not been
-    /// created yet (e.g. first run in record mode).
-    ///
-    /// The loader reads one exchange per line and never materialises the
-    /// whole file as a single string (per §8.1.1's 100k-exchange scale
-    /// target). Each malformed line yields a `ProxyError::Recording`.
-    ///
-    /// Gated on the `storage-jsonl` Cargo feature (on by default). When the
-    /// feature is off, callers should use [`ReplaySource::from_storage`]
-    /// with whichever backend they prefer.
-    #[cfg(feature = "storage-jsonl")]
-    pub fn from_jsonl(path: impl AsRef<Path>) -> Result<Self> {
-        let file = match std::fs::File::open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::new(Vec::new()));
-            }
-            Err(e) => return Err(ProxyError::Recording(e)),
-        };
-        let reader = BufReader::new(file);
-        let mut exchanges = Vec::new();
-        for (lineno, line) in reader.lines().enumerate() {
-            let line = line.map_err(ProxyError::Recording)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            // Single source of truth for the parse: the JSONL backend
-            // crate exports the same helper its own `load()` uses. No
-            // inline copy in this file.
-            let exchange = partly_proxy_storage_jsonl::parse_ndjson_line(&line, lineno)?;
-            exchanges.push(exchange);
-        }
-        Ok(Self::new(exchanges))
-    }
-
     /// Drain a `SnapshotStorage`'s `load()` stream into a replay source.
     ///
-    /// The async counterpart to [`from_jsonl`](Self::from_jsonl), generic
-    /// over any storage backend. Peak memory during construction is
+    /// Generic over any storage backend. Peak memory during construction is
     /// bounded by the largest single exchange — the stream is consumed
-    /// one item at a time, then the assembled `Vec` feeds the existing
-    /// `build_index` for O(1) lookups.
-    pub async fn from_storage(storage: &dyn SnapshotStorage) -> Result<Self> {
+    /// one item at a time, then the assembled `Vec` feeds `build_index`
+    /// for O(1) lookups.
+    pub(crate) async fn from_storage(storage: &dyn SnapshotStorage) -> Result<Self> {
         use futures::StreamExt;
         let mut stream = storage.load();
         let mut exchanges = Vec::new();
@@ -184,14 +83,10 @@ impl ReplaySource {
         Ok(Self::new(exchanges))
     }
 
-    /// Number of exchanges in the source.
-    pub fn len(&self) -> usize {
+    /// Number of exchanges in the source. Test-only introspection.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.inner.exchanges.len()
-    }
-
-    /// Whether the source is empty.
-    pub fn is_empty(&self) -> bool {
-        self.inner.exchanges.is_empty()
     }
 
     /// Look up a response for `req`. Returns `None` on miss or on a hit with
@@ -201,7 +96,11 @@ impl ReplaySource {
     /// `chain` is the effective middleware list — its
     /// `redact_request_for_snapshot` hooks fire on a working copy of `req`
     /// before the lookup key is computed.
-    pub fn lookup(&self, req: &ProxyRequest, chain: &[SharedMiddleware]) -> Option<ProxyResponse> {
+    pub(crate) fn lookup(
+        &self,
+        req: &ProxyRequest,
+        chain: &[SharedMiddleware],
+    ) -> Option<ProxyResponse> {
         let mut redacted = req.clone();
         middleware::redact_request(chain, &mut redacted);
         let key = (
@@ -435,10 +334,10 @@ mod tests {
 
     #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
-    async fn from_jsonl_round_trips() {
+    async fn jsonl_storage_round_trips() {
         // Build a recorder backed by an explicit JsonlStorage, drive
-        // some exchanges through it, then load that NDJSON file via
-        // ReplaySource.
+        // some exchanges through it, then load that NDJSON file back into a
+        // ReplaySource via `from_storage`.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.ndjson");
         let storage: partly_proxy_types::SharedStorage = Arc::new(
@@ -447,8 +346,9 @@ mod tests {
                 .expect("open jsonl"),
         );
         // Route the "api" upstream (stamped on each exchange below) to the
-        // JSONL medium so records land on disk.
-        let routes = std::collections::HashMap::from([("api".to_owned(), storage)]);
+        // JSONL medium so records land on disk. Keep an `Arc` clone to load
+        // from afterwards.
+        let routes = std::collections::HashMap::from([("api".to_owned(), storage.clone())]);
         let recorder = crate::recorder::Recorder::with_routes(
             crate::config::RecordingConfig::in_memory(100),
             routes,
@@ -476,7 +376,7 @@ mod tests {
                 .unwrap();
         }
 
-        let src = ReplaySource::from_jsonl(&path).unwrap();
+        let src = ReplaySource::from_storage(storage.as_ref()).await.unwrap();
         assert_eq!(src.len(), 3);
         let resp = src.lookup(&live(Method::GET, "/n/1", b""), &[]).unwrap();
         assert_eq!(resp.body, Bytes::from_static(b"body-1"));
