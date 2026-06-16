@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/thepartly/partly-proxy"
@@ -17,9 +17,9 @@ rust-version = "1.85"
 #   - `cargo publish` / `cargo release` use `version` from the registry.
 # Keep these versions in lock-step with `workspace.package.version` above;
 # `release.toml` (shared-version = true) enforces that on release.
-partly-proxy-types = { version = "0.3.0", path = "crates/partly-proxy-types" }
-partly-proxy-storage-jsonl = { version = "0.3.0", path = "crates/partly-proxy-storage-jsonl" }
-partly-proxy-storage-sqlite = { version = "0.3.0", path = "crates/partly-proxy-storage-sqlite" }
+partly-proxy-types = { version = "0.4.0", path = "crates/partly-proxy-types" }
+partly-proxy-storage-jsonl = { version = "0.4.0", path = "crates/partly-proxy-storage-jsonl" }
+partly-proxy-storage-sqlite = { version = "0.4.0", path = "crates/partly-proxy-storage-sqlite" }
 # `partly-proxy-echo` is `publish = false`; only consumed as a dev-dep
 # inside the workspace. Path-only is fine since dev-deps without a
 # version are stripped from the published manifest.

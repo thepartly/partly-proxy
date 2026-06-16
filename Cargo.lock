@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "partly-proxy-echo"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bytes",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "partly-proxy-lib"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "partly-proxy-storage-jsonl"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "partly-proxy-storage-sqlite"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "partly-proxy-types"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64",
