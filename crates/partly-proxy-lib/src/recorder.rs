@@ -60,7 +60,7 @@ impl Recorder {
     /// Build an in-memory-only recorder with no durable media. Persistence
     /// — NDJSON, `SQLite`, object store, or anything else implementing
     /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured per
-    /// upstream by attaching a [`Snapshots`](crate::Snapshots) medium via
+    /// upstream by attaching a storage backend via
     /// [`add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with);
     /// the builder threads the resulting routes through
     /// [`Recorder::with_routes`].

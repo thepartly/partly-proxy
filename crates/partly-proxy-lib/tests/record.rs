@@ -4,8 +4,8 @@ use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, ExchangeOutcome, MatchStrategy, ProxyClusterBuilder, ProxyConfig,
-    RecordedExchange, RecordingConfig, Snapshots, UpstreamTarget,
+    ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
+    RecordingConfig, UpstreamTarget,
 };
 use tokio::task::JoinHandle;
 
@@ -146,15 +146,7 @@ async fn ndjson_persist_file_is_replayable() {
     );
     let cluster = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(100))
-        .add_upstream_with(
-            "upstream",
-            cfg,
-            Vec::new(),
-            Some(Snapshots::from_storage(
-                storage,
-                MatchStrategy::MethodUriAndBodyHash,
-            )),
-        )
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage))
         .run()
         .await
         .unwrap();
@@ -188,7 +180,7 @@ async fn ndjson_persist_file_is_replayable() {
 
 /// Storage backend that counts every `append` and `flush` it sees and
 /// keeps the exchanges in memory. Used to verify the per-upstream
-/// `Snapshots::from_storage(...)` plumbing.
+/// `add_upstream_with(storage)` plumbing.
 #[derive(Debug, Default)]
 struct TrackingStorage {
     appended: tokio::sync::Mutex<Vec<RecordedExchange>>,
@@ -233,15 +225,7 @@ async fn custom_storage_via_per_upstream_snapshots() {
     );
     let cluster = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(100))
-        .add_upstream_with(
-            "upstream",
-            cfg,
-            Vec::new(),
-            Some(Snapshots::from_storage(
-                storage.clone(),
-                MatchStrategy::MethodUriAndBodyHash,
-            )),
-        )
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage.clone()))
         .run()
         .await
         .unwrap();

@@ -23,4 +23,4 @@ pub mod testing;
 
 pub use error::{BoxError, ProxyError, Result};
 pub use recorded::{ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse};
-pub use storage::{SharedStorage, SnapshotStorage};
+pub use storage::{InMemoryStorage, SharedStorage, SnapshotStorage};

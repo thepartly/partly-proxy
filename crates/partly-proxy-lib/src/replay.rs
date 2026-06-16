@@ -1,35 +1,28 @@
 //! Replay source — see `SPECIFICATION.md` §8.
 //!
-//! A `ReplaySource` is an immutable bundle of recorded exchanges plus a
-//! match strategy. The two supported strategies (per §8.1) are:
+//! `ReplaySource` is a crate-internal, immutable bundle of recorded
+//! exchanges indexed for O(1) lookup. The lookup key is `(method,
+//! origin-form URI (path + query string), body SHA-256)`, built once at
+//! construction (§8.1).
 //!
-//! - `MethodUriAndBodyHash` — O(1) hash-indexed lookup, built once at
-//!   construction. Keys on method, origin-form URI (path + query string),
-//!   and the body SHA-256. The default.
-//! - `Custom(closure)` — linear scan with a user predicate. Use sparingly
-//!   on large snapshots (§8.1.1).
+//! It is not part of the public API: callers attach a
+//! [`SnapshotStorage`](crate::SnapshotStorage) backend to an upstream
+//! (e.g. `JsonlStorage` or [`InMemoryStorage`](crate::InMemoryStorage)),
+//! and the cluster builds the `ReplaySource` from that backend's `load()`
+//! stream at `run()`.
 //!
 //! Lookups go through every middleware's `redact_request_for_snapshot`
 //! before the lookup key is computed (§8.2.1), so a request that carried
 //! a live `Authorization` header still matches a snapshot recorded with
 //! that header stripped.
 
-// Only `from_jsonl` uses these — gate them so `--no-default-features`
-// builds don't trip an unused-import warning.
-#[cfg(feature = "storage-jsonl")]
-use std::io::{BufRead, BufReader};
-#[cfg(feature = "storage-jsonl")]
-use std::path::Path;
 use std::{collections::HashMap, sync::Arc};
 
-// `ProxyError` is only constructed by the JSONL loader path (and the
-// from_storage tests). Gate the import accordingly to keep
-// --no-default-features warning-free.
-#[cfg(any(test, feature = "storage-jsonl"))]
+// `ProxyError` is only constructed in the storage-error test below.
+#[cfg(test)]
 use partly_proxy_types::ProxyError;
 use partly_proxy_types::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SharedStorage, SnapshotStorage,
-    hash::sha256_hex,
+    ExchangeOutcome, RecordedExchange, Result, SnapshotStorage, hash::sha256_hex,
 };
 
 use crate::{
@@ -37,132 +30,28 @@ use crate::{
     proxy_io::{ProxyRequest, ProxyResponse},
 };
 
-/// Predicate type used by [`MatchStrategy::Custom`]. Defined as a type alias
-/// so the trait-object type doesn't trip clippy's `type_complexity` lint.
-pub type CustomMatcher = Arc<dyn Fn(&RecordedRequest, &ProxyRequest) -> bool + Send + Sync>;
-
-/// Match strategy for a [`ReplaySource`].
-#[derive(Clone, Default)]
-pub enum MatchStrategy {
-    /// `(method, uri.path_and_query(), sha256_hex(body))`. Hash-indexed;
-    /// O(1) lookup.
-    ///
-    /// Includes the query string so APIs that pass their data in query
-    /// parameters with an empty body (e.g. `GET /vehicle?plate=ABC123`)
-    /// match per-request rather than collapsing to the first snapshot at
-    /// that path. Query-string bytes are compared verbatim — parameter
-    /// reordering is treated as a different request; callers needing
-    /// canonicalisation should use [`MatchStrategy::Custom`].
-    #[default]
-    MethodUriAndBodyHash,
-    /// User-supplied predicate; falls back to a linear scan over every
-    /// exchange. The closure is invoked with the on-disk
-    /// [`RecordedRequest`] and the live (already-redacted) [`ProxyRequest`].
-    Custom(CustomMatcher),
-}
-
-impl std::fmt::Debug for MatchStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MethodUriAndBodyHash => f.write_str("MethodUriAndBodyHash"),
-            Self::Custom(_) => f.write_str("Custom(<closure>)"),
-        }
-    }
-}
-
-/// Per-upstream snapshot medium handed to
-/// [`add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with).
-///
-/// A single `Snapshots` drives both ends of the record/replay round-trip.
-/// At cluster [`run()`](crate::ProxyClusterBuilder::run) its existing
-/// contents are loaded and indexed into a [`ReplaySource`]; in
-/// [`Mode::Record`](crate::Mode) every new exchange for that upstream is
-/// appended back to the same medium. There is no separate cluster-wide
-/// storage knob — recording is configured per upstream, here.
-pub struct Snapshots {
-    strategy: MatchStrategy,
-    source: SnapshotsSource,
-}
-
-enum SnapshotsSource {
-    /// Durable medium — loaded for replay, appended to while recording.
-    Storage(SharedStorage),
-    /// In-memory exchanges — replay only, never recorded back. Handy for
-    /// tests and fixtures that don't want to touch the filesystem.
-    InMemory(Vec<RecordedExchange>),
-}
-
-impl Snapshots {
-    /// Use a durable [`SharedStorage`] medium (e.g. a JSONL file) as both
-    /// the replay source and the recording sink for this upstream.
-    pub fn from_storage(storage: SharedStorage, strategy: MatchStrategy) -> Self {
-        Self {
-            strategy,
-            source: SnapshotsSource::Storage(storage),
-        }
-    }
-
-    /// Use an in-memory list of exchanges as a replay-only source. Nothing
-    /// recorded at runtime is written back — the medium is read-only.
-    pub fn in_memory(exchanges: Vec<RecordedExchange>, strategy: MatchStrategy) -> Self {
-        Self {
-            strategy,
-            source: SnapshotsSource::InMemory(exchanges),
-        }
-    }
-
-    /// Resolve into the replay source consulted on the hot path and, for a
-    /// durable medium, the storage handle to register as the upstream's
-    /// recording sink. Called once per upstream at cluster `run()`.
-    pub(crate) async fn resolve(self) -> Result<(ReplaySource, Option<SharedStorage>)> {
-        match self.source {
-            SnapshotsSource::Storage(storage) => {
-                let replay = ReplaySource::from_storage(storage.as_ref(), self.strategy).await?;
-                Ok((replay, Some(storage)))
-            }
-            SnapshotsSource::InMemory(exchanges) => {
-                Ok((ReplaySource::new(exchanges, self.strategy), None))
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for Snapshots {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind = match &self.source {
-            SnapshotsSource::Storage(_) => "Storage",
-            SnapshotsSource::InMemory(_) => "InMemory",
-        };
-        f.debug_struct("Snapshots")
-            .field("strategy", &self.strategy)
-            .field("source", &kind)
-            .finish()
-    }
-}
-
-/// Key used by `MethodUriAndBodyHash`: (method, path+query, body sha-256 hex).
+/// Lookup key: (method, path+query, body sha-256 hex).
 type IndexKey = (String, String, String);
 
 /// Cheap-to-clone replay source. Behind an `Arc`, so several listeners can
-/// share one source.
+/// share one source. Crate-internal — built from an attached
+/// [`SnapshotStorage`] at cluster `run()`, never constructed by callers.
 #[derive(Clone)]
-pub struct ReplaySource {
+pub(crate) struct ReplaySource {
     inner: Arc<ReplaySourceInner>,
 }
 
 struct ReplaySourceInner {
-    strategy: MatchStrategy,
     exchanges: Vec<RecordedExchange>,
-    /// Populated only for `MethodUriAndBodyHash`. Maps the lookup key to an
-    /// index into `exchanges`. The *first* exchange written for a given key
-    /// wins on collision — that way replay is deterministic across reloads.
+    /// Maps the lookup key to an index into `exchanges`. The *first*
+    /// exchange written for a given key wins on collision — that way
+    /// replay is deterministic across reloads.
     index: HashMap<IndexKey, usize>,
 }
 
 impl std::fmt::Debug for ReplaySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplaySource")
-            .field("strategy", &self.inner.strategy)
             .field("exchanges", &self.inner.exchanges.len())
             .field("index", &self.inner.index.len())
             .finish_non_exhaustive()
@@ -171,115 +60,59 @@ impl std::fmt::Debug for ReplaySource {
 
 impl ReplaySource {
     /// Build a replay source from an in-memory list of exchanges.
-    pub fn new(exchanges: Vec<RecordedExchange>, strategy: MatchStrategy) -> Self {
-        let index = build_index(&exchanges, &strategy);
+    pub(crate) fn new(exchanges: Vec<RecordedExchange>) -> Self {
+        let index = build_index(&exchanges);
         Self {
-            inner: Arc::new(ReplaySourceInner {
-                strategy,
-                exchanges,
-                index,
-            }),
+            inner: Arc::new(ReplaySourceInner { exchanges, index }),
         }
-    }
-
-    /// Stream an NDJSON file line-by-line into a replay source.
-    ///
-    /// If the file does not exist an empty [`ReplaySource`] is returned —
-    /// this covers the common case where a snapshots file has not been
-    /// created yet (e.g. first run in record mode).
-    ///
-    /// The loader reads one exchange per line and never materialises the
-    /// whole file as a single string (per §8.1.1's 100k-exchange scale
-    /// target). Each malformed line yields a `ProxyError::Recording`.
-    ///
-    /// Gated on the `storage-jsonl` Cargo feature (on by default). When the
-    /// feature is off, callers should use [`ReplaySource::from_storage`]
-    /// with whichever backend they prefer.
-    #[cfg(feature = "storage-jsonl")]
-    pub fn from_jsonl(path: impl AsRef<Path>, strategy: MatchStrategy) -> Result<Self> {
-        let file = match std::fs::File::open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::new(Vec::new(), strategy));
-            }
-            Err(e) => return Err(ProxyError::Recording(e)),
-        };
-        let reader = BufReader::new(file);
-        let mut exchanges = Vec::new();
-        for (lineno, line) in reader.lines().enumerate() {
-            let line = line.map_err(ProxyError::Recording)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            // Single source of truth for the parse: the JSONL backend
-            // crate exports the same helper its own `load()` uses. No
-            // inline copy in this file.
-            let exchange = partly_proxy_storage_jsonl::parse_ndjson_line(&line, lineno)?;
-            exchanges.push(exchange);
-        }
-        Ok(Self::new(exchanges, strategy))
     }
 
     /// Drain a `SnapshotStorage`'s `load()` stream into a replay source.
     ///
-    /// The async counterpart to [`from_jsonl`](Self::from_jsonl), generic
-    /// over any storage backend. Peak memory during construction is
+    /// Generic over any storage backend. Peak memory during construction is
     /// bounded by the largest single exchange — the stream is consumed
-    /// one item at a time, then the assembled `Vec` feeds the existing
-    /// `build_index` for O(1) `MethodUriAndBodyHash` lookups.
-    pub async fn from_storage(
-        storage: &dyn SnapshotStorage,
-        strategy: MatchStrategy,
-    ) -> Result<Self> {
+    /// one item at a time, then the assembled `Vec` feeds `build_index`
+    /// for O(1) lookups.
+    pub(crate) async fn from_storage(storage: &dyn SnapshotStorage) -> Result<Self> {
         use futures::StreamExt;
         let mut stream = storage.load();
         let mut exchanges = Vec::new();
         while let Some(item) = stream.next().await {
             exchanges.push(item?);
         }
-        Ok(Self::new(exchanges, strategy))
+        Ok(Self::new(exchanges))
     }
 
-    /// Number of exchanges in the source.
-    pub fn len(&self) -> usize {
+    /// Number of exchanges in the source. Test-only introspection.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.inner.exchanges.len()
     }
 
-    /// Whether the source is empty.
-    pub fn is_empty(&self) -> bool {
-        self.inner.exchanges.is_empty()
-    }
-
-    /// Look up a response for `req`. Returns `None` on miss, on a hit with an
-    /// `Error` outcome (errors are intentionally not replayed — use stubs for
-    /// that), or when the match strategy refuses the request.
+    /// Look up a response for `req`. Returns `None` on miss or on a hit with
+    /// an `Error` outcome (errors are intentionally not replayed — use stubs
+    /// for that).
     ///
     /// `chain` is the effective middleware list — its
     /// `redact_request_for_snapshot` hooks fire on a working copy of `req`
     /// before the lookup key is computed.
-    pub fn lookup(&self, req: &ProxyRequest, chain: &[SharedMiddleware]) -> Option<ProxyResponse> {
+    pub(crate) fn lookup(
+        &self,
+        req: &ProxyRequest,
+        chain: &[SharedMiddleware],
+    ) -> Option<ProxyResponse> {
         let mut redacted = req.clone();
         middleware::redact_request(chain, &mut redacted);
-        let matched = match &self.inner.strategy {
-            MatchStrategy::MethodUriAndBodyHash => {
-                let key = (
-                    redacted.method.as_str().to_owned(),
-                    path_and_query_of_uri(&redacted.uri),
-                    sha256_hex(&redacted.body),
-                );
-                self.inner
-                    .index
-                    .get(&key)
-                    .and_then(|&i| self.inner.exchanges.get(i))
-            }
-            MatchStrategy::Custom(f) => self
-                .inner
-                .exchanges
-                .iter()
-                .find(|e| f(&e.request, &redacted)),
-        };
-
-        let exchange = matched?;
+        let key = (
+            redacted.method.as_str().to_owned(),
+            path_and_query_of_uri(&redacted.uri),
+            sha256_hex(&redacted.body),
+        );
+        let exchange = self
+            .inner
+            .index
+            .get(&key)
+            .and_then(|&i| self.inner.exchanges.get(i))?;
         match &exchange.outcome {
             ExchangeOutcome::Response(r) => Some(ProxyResponse {
                 status: r.status(),
@@ -292,13 +125,7 @@ impl ReplaySource {
     }
 }
 
-fn build_index(
-    exchanges: &[RecordedExchange],
-    strategy: &MatchStrategy,
-) -> HashMap<IndexKey, usize> {
-    if !matches!(strategy, MatchStrategy::MethodUriAndBodyHash) {
-        return HashMap::new();
-    }
+fn build_index(exchanges: &[RecordedExchange]) -> HashMap<IndexKey, usize> {
     let mut index = HashMap::with_capacity(exchanges.len());
     for (i, e) in exchanges.iter().enumerate() {
         if !matches!(e.outcome, ExchangeOutcome::Response(_)) {
@@ -393,14 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn hash_strategy_finds_exact_match() {
-        let src = ReplaySource::new(
-            vec![
-                make_exchange(Method::GET, "/health", b"", 200),
-                make_exchange(Method::POST, "/orders", b"{\"n\":1}", 201),
-            ],
-            MatchStrategy::MethodUriAndBodyHash,
-        );
+    fn lookup_finds_exact_match() {
+        let src = ReplaySource::new(vec![
+            make_exchange(Method::GET, "/health", b"", 200),
+            make_exchange(Method::POST, "/orders", b"{\"n\":1}", 201),
+        ]);
         let resp = src.lookup(&live(Method::GET, "/health", b""), &[]).unwrap();
         assert_eq!(resp.status, StatusCode::OK);
         assert_eq!(
@@ -411,14 +235,11 @@ mod tests {
     }
 
     #[test]
-    fn hash_strategy_distinguishes_by_body() {
-        let src = ReplaySource::new(
-            vec![
-                make_exchange(Method::POST, "/orders", b"{\"n\":1}", 201),
-                make_exchange(Method::POST, "/orders", b"{\"n\":2}", 202),
-            ],
-            MatchStrategy::MethodUriAndBodyHash,
-        );
+    fn lookup_distinguishes_by_body() {
+        let src = ReplaySource::new(vec![
+            make_exchange(Method::POST, "/orders", b"{\"n\":1}", 201),
+            make_exchange(Method::POST, "/orders", b"{\"n\":2}", 202),
+        ]);
         let r1 = src
             .lookup(&live(Method::POST, "/orders", b"{\"n\":1}"), &[])
             .unwrap();
@@ -430,11 +251,8 @@ mod tests {
     }
 
     #[test]
-    fn hash_strategy_misses_when_method_or_path_or_body_differs() {
-        let src = ReplaySource::new(
-            vec![make_exchange(Method::GET, "/health", b"", 200)],
-            MatchStrategy::MethodUriAndBodyHash,
-        );
+    fn lookup_misses_when_method_or_path_or_body_differs() {
+        let src = ReplaySource::new(vec![make_exchange(Method::GET, "/health", b"", 200)]);
         assert!(
             src.lookup(&live(Method::POST, "/health", b""), &[])
                 .is_none()
@@ -447,19 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn hash_strategy_distinguishes_by_query_string() {
+    fn lookup_distinguishes_by_query_string() {
         // Regression: query-string-driven APIs (data in the query, empty
         // body) used to collapse to the first snapshot at a given path
-        // because the lookup key dropped the query. The default strategy
-        // now includes path+query, so each distinct query string is its
-        // own entry.
-        let src = ReplaySource::new(
-            vec![
-                make_exchange(Method::GET, "/vehicle?plate=ABC123", b"", 200),
-                make_exchange(Method::GET, "/vehicle?plate=XYZ999", b"", 201),
-            ],
-            MatchStrategy::MethodUriAndBodyHash,
-        );
+        // because the lookup key dropped the query. The key now includes
+        // path+query, so each distinct query string is its own entry.
+        let src = ReplaySource::new(vec![
+            make_exchange(Method::GET, "/vehicle?plate=ABC123", b"", 200),
+            make_exchange(Method::GET, "/vehicle?plate=XYZ999", b"", 201),
+        ]);
         let abc = src
             .lookup(&live(Method::GET, "/vehicle?plate=ABC123", b""), &[])
             .unwrap();
@@ -481,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_strategy_tolerates_absolute_form_recorded_uri() {
+    fn lookup_tolerates_absolute_form_recorded_uri() {
         // Live requests arrive in origin-form; recorder may store an
         // absolute-form URI (`http://host/path?query`). The index must
         // strip scheme+authority but keep the query.
@@ -491,7 +305,7 @@ mod tests {
             b"",
             200,
         );
-        let src = ReplaySource::new(vec![recorded], MatchStrategy::MethodUriAndBodyHash);
+        let src = ReplaySource::new(vec![recorded]);
         let hit = src
             .lookup(&live(Method::GET, "/vehicle?plate=ABC123", b""), &[])
             .unwrap();
@@ -514,34 +328,16 @@ mod tests {
             },
             Duration::from_millis(1),
         );
-        let src = ReplaySource::new(vec![ex], MatchStrategy::MethodUriAndBodyHash);
+        let src = ReplaySource::new(vec![ex]);
         assert!(src.lookup(&live(Method::GET, "/oops", b""), &[]).is_none());
-    }
-
-    #[test]
-    fn custom_strategy_runs_predicate() {
-        let src = ReplaySource::new(
-            vec![
-                make_exchange(Method::GET, "/a", b"", 200),
-                make_exchange(Method::GET, "/b", b"", 201),
-                make_exchange(Method::GET, "/c", b"", 202),
-            ],
-            MatchStrategy::Custom(Arc::new(|recorded, live| {
-                recorded.uri.contains("/b") && live.method == Method::GET
-            })),
-        );
-        let resp = src
-            .lookup(&live(Method::GET, "/anything", b""), &[])
-            .unwrap();
-        assert_eq!(resp.status, StatusCode::CREATED);
     }
 
     #[cfg(feature = "storage-jsonl")]
     #[tokio::test]
-    async fn from_jsonl_round_trips() {
+    async fn jsonl_storage_round_trips() {
         // Build a recorder backed by an explicit JsonlStorage, drive
-        // some exchanges through it, then load that NDJSON file via
-        // ReplaySource.
+        // some exchanges through it, then load that NDJSON file back into a
+        // ReplaySource via `from_storage`.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.ndjson");
         let storage: partly_proxy_types::SharedStorage = Arc::new(
@@ -550,8 +346,9 @@ mod tests {
                 .expect("open jsonl"),
         );
         // Route the "api" upstream (stamped on each exchange below) to the
-        // JSONL medium so records land on disk.
-        let routes = std::collections::HashMap::from([("api".to_owned(), storage)]);
+        // JSONL medium so records land on disk. Keep an `Arc` clone to load
+        // from afterwards.
+        let routes = std::collections::HashMap::from([("api".to_owned(), storage.clone())]);
         let recorder = crate::recorder::Recorder::with_routes(
             crate::config::RecordingConfig::in_memory(100),
             routes,
@@ -579,7 +376,7 @@ mod tests {
                 .unwrap();
         }
 
-        let src = ReplaySource::from_jsonl(&path, MatchStrategy::MethodUriAndBodyHash).unwrap();
+        let src = ReplaySource::from_storage(storage.as_ref()).await.unwrap();
         assert_eq!(src.len(), 3);
         let resp = src.lookup(&live(Method::GET, "/n/1", b""), &[]).unwrap();
         assert_eq!(resp.body, Bytes::from_static(b"body-1"));
@@ -619,9 +416,7 @@ mod tests {
         let storage = MockStorage {
             exchanges: exchanges.clone(),
         };
-        let src = ReplaySource::from_storage(&storage, MatchStrategy::MethodUriAndBodyHash)
-            .await
-            .unwrap();
+        let src = ReplaySource::from_storage(&storage).await.unwrap();
         assert_eq!(src.len(), 2);
         let resp = src
             .lookup(&live(Method::POST, "/b", b"{\"n\":1}"), &[])
@@ -649,9 +444,7 @@ mod tests {
                 ))]))
             }
         }
-        let err = ReplaySource::from_storage(&BadStorage, MatchStrategy::MethodUriAndBodyHash)
-            .await
-            .unwrap_err();
+        let err = ReplaySource::from_storage(&BadStorage).await.unwrap_err();
         assert!(matches!(err, ProxyError::Recording(_)));
     }
 }
