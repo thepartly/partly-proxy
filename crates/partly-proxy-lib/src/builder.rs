@@ -8,7 +8,7 @@
 //! deterministic.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
 };
@@ -26,7 +26,7 @@ use crate::{
     middleware::{ProxyMiddleware, SharedMiddleware},
     proxy_io::{ProxyRequest, ProxyResponse},
     recorder::Recorder,
-    replay::ReplaySource,
+    replay::Snapshots,
     upstream::UpstreamRegistry,
 };
 
@@ -50,7 +50,6 @@ pub struct ProxyClusterBuilder {
     upstreams: Vec<UpstreamSpec>,
     global_middleware: Vec<SharedMiddleware>,
     tcp_control_addr: Option<SocketAddr>,
-    storage: Option<SharedStorage>,
     replay_miss_handler: ReplayMissHandler,
 }
 
@@ -62,7 +61,6 @@ impl Default for ProxyClusterBuilder {
             upstreams: Vec::new(),
             global_middleware: Vec::new(),
             tcp_control_addr: None,
-            storage: None,
             replay_miss_handler: default_replay_miss_handler(),
         }
     }
@@ -78,7 +76,6 @@ impl std::fmt::Debug for ProxyClusterBuilder {
             )
             .field("global_middleware", &self.global_middleware.len())
             .field("tcp_control_addr", &self.tcp_control_addr)
-            .field("storage", &self.storage.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -88,7 +85,9 @@ pub(crate) struct UpstreamSpec {
     pub name: String,
     pub config: ProxyConfig,
     pub middleware: Vec<SharedMiddleware>,
-    pub replay: Option<ReplaySource>,
+    /// Per-upstream snapshot medium — loaded for replay and (in `Record`)
+    /// appended to as the recording sink. Resolved at `run()`.
+    pub snapshots: Option<Snapshots>,
     pub mode: Mode,
     pub replay_miss_handler: ReplayMissHandler,
 }
@@ -98,7 +97,7 @@ impl std::fmt::Debug for UpstreamSpec {
         f.debug_struct("UpstreamSpec")
             .field("name", &self.name)
             .field("middleware", &self.middleware.len())
-            .field("replay", &self.replay.is_some())
+            .field("snapshots", &self.snapshots.is_some())
             .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
@@ -153,7 +152,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware: Vec::new(),
-            replay: None,
+            snapshots: None,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -173,7 +172,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware,
-            replay: None,
+            snapshots: None,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -181,8 +180,14 @@ impl ProxyClusterBuilder {
     }
 
     /// Register an upstream with both per-upstream middleware and an
-    /// optional replay source. Uses the builder's current
+    /// optional [`Snapshots`] medium. Uses the builder's current
     /// [`default_mode`](Self::default_mode).
+    ///
+    /// The `snapshots` medium is the single per-upstream storage knob: at
+    /// [`run()`](Self::run) its existing contents are loaded into the replay
+    /// source, and in [`Mode::Record`] every new exchange for this upstream
+    /// is appended back to it. Give each upstream its own medium (e.g. its
+    /// own JSONL file) to keep recordings separate.
     ///
     /// See `SPECIFICATION.md` §8.3: in `Record` mode, stubs take priority
     /// over replay, which takes priority over the upstream forward. To
@@ -193,13 +198,13 @@ impl ProxyClusterBuilder {
         name: impl Into<String>,
         config: ProxyConfig,
         middleware: Vec<SharedMiddleware>,
-        replay: Option<ReplaySource>,
+        snapshots: Option<Snapshots>,
     ) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware,
-            replay,
+            snapshots,
             mode: self.default_mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -213,20 +218,20 @@ impl ProxyClusterBuilder {
     /// missing snapshot yields the replay-miss response (default `503 {}`).
     /// In [`Mode::Record`] the terminal falls through to the upstream on
     /// miss and (when recording is enabled) appends the exchange to the
-    /// recorder.
+    /// upstream's [`Snapshots`] medium.
     pub fn add_upstream_with_mode(
         mut self,
         name: impl Into<String>,
         config: ProxyConfig,
         middleware: Vec<SharedMiddleware>,
-        replay: Option<ReplaySource>,
+        snapshots: Option<Snapshots>,
         mode: Mode,
     ) -> Self {
         self.upstreams.push(UpstreamSpec {
             name: name.into(),
             config,
             middleware,
-            replay,
+            snapshots,
             mode,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -251,7 +256,7 @@ impl ProxyClusterBuilder {
             name: name.into(),
             config,
             middleware,
-            replay: None,
+            snapshots: None,
             mode: Mode::Replay,
             replay_miss_handler: Arc::clone(&self.replay_miss_handler),
         });
@@ -299,19 +304,6 @@ impl ProxyClusterBuilder {
         self
     }
 
-    /// Override the recorder's storage backend.
-    ///
-    /// When set, `run()` builds the recorder via
-    /// [`Recorder::with_storage`](crate::Recorder::with_storage) and the
-    /// provided `SharedStorage` is used for every recorded exchange. When
-    /// unset, the recorder falls back to opening the default backend from
-    /// `RecordingConfig::persist_path` (NDJSON when the `storage-jsonl`
-    /// feature is on, in-memory only otherwise).
-    pub fn storage(mut self, storage: SharedStorage) -> Self {
-        self.storage = Some(storage);
-        self
-    }
-
     /// Bind every listener and start its accept loop.
     ///
     /// Returns a [`ClusterHandle`](crate::ClusterHandle) once all listeners
@@ -329,20 +321,39 @@ impl ProxyClusterBuilder {
             }
         }
 
-        let recorder = match self.storage.clone() {
-            Some(storage) => Recorder::with_storage(self.recording.clone(), Some(storage)),
-            None => Recorder::new(self.recording.clone()),
-        };
+        // Resolve each upstream's snapshot medium up front: load its
+        // contents into a replay source for the hot path, and collect the
+        // durable media into a per-upstream routing map for the recorder.
+        // Loading is async (it streams the backend), so it happens here in
+        // `run()` rather than in the synchronous `add_upstream_*` builders.
+        let mut routes: HashMap<String, SharedStorage> = HashMap::new();
+        let mut resolved = Vec::with_capacity(self.upstreams.len());
+        for mut spec in self.upstreams {
+            let replay = match spec.snapshots.take() {
+                Some(snapshots) => {
+                    let (replay, storage) = snapshots.resolve().await?;
+                    if let Some(storage) = storage {
+                        routes.insert(spec.name.clone(), storage);
+                    }
+                    Some(replay)
+                }
+                None => None,
+            };
+            resolved.push((spec, replay));
+        }
+
+        let recorder = Recorder::with_routes(self.recording.clone(), routes);
         let (shutdown_tx, shutdown_rx) = watch::channel::<Option<std::time::Duration>>(None);
         let mut upstreams = BTreeMap::new();
         let mut registry = UpstreamRegistry::default();
 
         let global_middleware = self.global_middleware;
 
-        for spec in self.upstreams {
+        for (spec, replay) in resolved {
             let name = spec.name.clone();
             match listener::spawn_listener(
                 spec,
+                replay,
                 global_middleware.clone(),
                 recorder.clone(),
                 shutdown_rx.clone(),

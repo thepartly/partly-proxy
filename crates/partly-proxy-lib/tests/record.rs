@@ -4,8 +4,8 @@ use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
-    RecordingConfig, UpstreamTarget,
+    ClusterHandle, ExchangeOutcome, MatchStrategy, ProxyClusterBuilder, ProxyConfig,
+    RecordedExchange, RecordingConfig, Snapshots, UpstreamTarget,
 };
 use tokio::task::JoinHandle;
 
@@ -146,8 +146,15 @@ async fn ndjson_persist_file_is_replayable() {
     );
     let cluster = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(100))
-        .storage(storage)
-        .add_upstream("upstream", cfg)
+        .add_upstream_with(
+            "upstream",
+            cfg,
+            Vec::new(),
+            Some(Snapshots::from_storage(
+                storage,
+                MatchStrategy::MethodUriAndBodyHash,
+            )),
+        )
         .run()
         .await
         .unwrap();
@@ -180,8 +187,8 @@ async fn ndjson_persist_file_is_replayable() {
 }
 
 /// Storage backend that counts every `append` and `flush` it sees and
-/// keeps the exchanges in memory. Used to verify the
-/// `ProxyClusterBuilder::storage(...)` plumbing.
+/// keeps the exchanges in memory. Used to verify the per-upstream
+/// `Snapshots::from_storage(...)` plumbing.
 #[derive(Debug, Default)]
 struct TrackingStorage {
     appended: tokio::sync::Mutex<Vec<RecordedExchange>>,
@@ -215,7 +222,7 @@ impl partly_proxy_lib::SnapshotStorage for TrackingStorage {
 }
 
 #[tokio::test]
-async fn custom_storage_via_builder_storage_setter() {
+async fn custom_storage_via_per_upstream_snapshots() {
     let (echo_addr, _t) = spawn_echo().await;
     let storage = std::sync::Arc::new(TrackingStorage::default());
     let cfg = ProxyConfig::http(
@@ -226,8 +233,15 @@ async fn custom_storage_via_builder_storage_setter() {
     );
     let cluster = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(100))
-        .storage(storage.clone())
-        .add_upstream("upstream", cfg)
+        .add_upstream_with(
+            "upstream",
+            cfg,
+            Vec::new(),
+            Some(Snapshots::from_storage(
+                storage.clone(),
+                MatchStrategy::MethodUriAndBodyHash,
+            )),
+        )
         .run()
         .await
         .unwrap();

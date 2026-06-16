@@ -93,8 +93,9 @@ impl ClusterHandle {
         &self.recording
     }
 
-    /// Shared recorder — cheap to clone. Holds the in-memory ring and
-    /// optionally appends to the configured NDJSON file. See
+    /// Shared recorder — cheap to clone. Holds the cluster-wide in-memory
+    /// ring and routes each exchange to its upstream's durable medium (if
+    /// one was attached via a [`Snapshots`](crate::Snapshots)). See
     /// `SPECIFICATION.md` §9.
     pub fn recorder(&self) -> &Recorder {
         &self.recorder

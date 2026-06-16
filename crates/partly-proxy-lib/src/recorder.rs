@@ -1,16 +1,22 @@
 //! Shared traffic recorder — see `SPECIFICATION.md` §9.2.
 //!
-//! The recorder owns an in-memory ring buffer of `RecordedExchange`s and,
-//! optionally, a pluggable [`SnapshotStorage`](crate::SnapshotStorage)
-//! medium for durable persistence. It is cheaply cloneable (`Arc`-backed);
-//! every listener task and the future control plane share one instance
-//! per cluster.
+//! The recorder owns a single cluster-wide in-memory ring buffer of
+//! `RecordedExchange`s — that ring backs the cluster-wide assertion/query
+//! API (`QueryTraffic`, `AssertSeen`, `AssertCount`). Durable persistence,
+//! by contrast, is configured *per upstream*: the recorder holds a routing
+//! map from upstream name to its [`SnapshotStorage`](crate::SnapshotStorage)
+//! medium, and each exchange is appended to the medium registered for its
+//! own upstream (if any). It is cheaply cloneable (`Arc`-backed); every
+//! listener task and the control plane share one instance per cluster.
 //!
 //! Redaction (`redact_request_for_snapshot` / `redact_response_for_snapshot`,
 //! §6.4) happens in the lifecycle code *before* this recorder is called —
 //! the recorder hashes and stores whatever it is handed.
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use partly_proxy_types::{RecordedExchange, Result, SharedStorage};
 use tokio::sync::{Notify, RwLock};
@@ -28,7 +34,7 @@ impl std::fmt::Debug for Recorder {
         f.debug_struct("Recorder")
             .field("enabled", &self.inner.config.enabled)
             .field("max_in_memory", &self.inner.config.max_in_memory)
-            .field("has_storage", &self.inner.storage.is_some())
+            .field("storage_routes", &self.inner.storage.len())
             .finish_non_exhaustive()
     }
 }
@@ -36,8 +42,10 @@ impl std::fmt::Debug for Recorder {
 struct RecorderInner {
     config: RecordingConfig,
     state: RwLock<RecorderState>,
-    /// Pluggable durable medium. `None` ⇒ in-memory only.
-    storage: Option<SharedStorage>,
+    /// Per-upstream durable media, keyed by upstream name. An exchange is
+    /// appended to the medium registered for its `upstream`; upstreams with
+    /// no entry (and exchanges with no name) are kept in memory only.
+    storage: HashMap<String, SharedStorage>,
     /// Fired (via `notify_waiters`) every time a new exchange is recorded.
     /// The wait-for assertion loop registers a waiter before each predicate
     /// check, so notifications that arrive between checks are not lost.
@@ -49,20 +57,21 @@ struct RecorderState {
 }
 
 impl Recorder {
-    /// Build an in-memory-only recorder. Persistence — NDJSON,
-    /// `SQLite`, object store, or anything else implementing
-    /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured by
-    /// constructing the backend yourself and threading it through
-    /// [`Recorder::with_storage`] or
-    /// [`ProxyClusterBuilder::storage`](crate::ProxyClusterBuilder::storage).
+    /// Build an in-memory-only recorder with no durable media. Persistence
+    /// — NDJSON, `SQLite`, object store, or anything else implementing
+    /// [`SnapshotStorage`](crate::SnapshotStorage) — is configured per
+    /// upstream by attaching a [`Snapshots`](crate::Snapshots) medium via
+    /// [`add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with);
+    /// the builder threads the resulting routes through
+    /// [`Recorder::with_routes`].
     pub fn new(config: RecordingConfig) -> Self {
-        Self::with_storage(config, None)
+        Self::with_routes(config, HashMap::new())
     }
 
-    /// Build a recorder from an already-constructed storage backend.
-    /// Synchronous — no I/O. The caller owns the file/connection
-    /// lifecycle that produced `storage`.
-    pub fn with_storage(config: RecordingConfig, storage: Option<SharedStorage>) -> Self {
+    /// Build a recorder from a map of upstream name to its durable storage
+    /// backend. Synchronous — no I/O. The caller owns the file/connection
+    /// lifecycle that produced each medium.
+    pub fn with_routes(config: RecordingConfig, storage: HashMap<String, SharedStorage>) -> Self {
         let initial_capacity = config.max_in_memory.min(1024);
         Self {
             inner: Arc::new(RecorderInner {
@@ -94,16 +103,17 @@ impl Recorder {
         self.inner.config.max_in_memory
     }
 
-    /// View the underlying storage backend, if any.
-    pub fn storage(&self) -> Option<&SharedStorage> {
-        self.inner.storage.as_ref()
+    /// View the durable storage backend registered for `upstream`, if any.
+    pub fn storage_for(&self, upstream: &str) -> Option<&SharedStorage> {
+        self.inner.storage.get(upstream)
     }
 
     /// Insert an exchange. If the buffer is at capacity, the oldest entry is
-    /// evicted first (FIFO). When the recorder has a storage backend, the
-    /// exchange is appended to durable storage *before* it lands in memory —
-    /// that way a storage error stops the exchange from becoming visible
-    /// to predicate scans.
+    /// evicted first (FIFO). When the exchange's `upstream` has a registered
+    /// storage backend, the exchange is appended to that medium *before* it
+    /// lands in memory — that way a storage error stops the exchange from
+    /// becoming visible to predicate scans. Exchanges whose upstream has no
+    /// registered medium (or no name) are kept in memory only.
     ///
     /// When recording is disabled, this is a no-op.
     pub async fn record(&self, exchange: RecordedExchange) -> Result<()> {
@@ -117,7 +127,11 @@ impl Recorder {
         // sides observe insertions in the same sequence.
         let mut state = self.inner.state.write().await;
 
-        if let Some(storage) = &self.inner.storage {
+        if let Some(storage) = exchange
+            .upstream
+            .as_deref()
+            .and_then(|name| self.inner.storage.get(name))
+        {
             storage.append(&exchange).await?;
         }
 
@@ -141,12 +155,12 @@ impl Recorder {
         Ok(())
     }
 
-    /// Make every previously appended exchange durable. Delegates to
-    /// `SnapshotStorage::flush`. Called explicitly by callers and by
-    /// `ClusterHandle::shutdown` to fence batching backends (object
-    /// store) before tear-down.
+    /// Make every previously appended exchange durable across all
+    /// registered media. Delegates to `SnapshotStorage::flush`. Called
+    /// explicitly by callers and by `ClusterHandle::shutdown` to fence
+    /// batching backends (object store) before tear-down.
     pub async fn flush(&self) -> Result<()> {
-        if let Some(storage) = &self.inner.storage {
+        for storage in self.inner.storage.values() {
             storage.flush().await?;
         }
         Ok(())
@@ -316,7 +330,10 @@ mod tests {
         let path = dir.path().join("trace.ndjson");
         let storage: SharedStorage =
             Arc::new(crate::jsonl::JsonlStorage::open(&path).await.unwrap());
-        let recorder = Recorder::with_storage(RecordingConfig::in_memory(10), Some(storage));
+        // `make_exchange` stamps the upstream name "api"; route that name to
+        // the JSONL medium so the exchanges land on disk.
+        let routes = HashMap::from([("api".to_owned(), storage)]);
+        let recorder = Recorder::with_routes(RecordingConfig::in_memory(10), routes);
         recorder
             .record(make_exchange("/a", b"hello"))
             .await

@@ -79,7 +79,7 @@ Scheme is auto-detected from `base_url` — HTTP and HTTPS upstreams use the sam
 | `enabled: bool` | `true` | Whether exchanges are recorded |
 | `max_in_memory: usize` | `10_000` | Cap for the in-memory ring buffer (FIFO eviction) |
 
-`RecordingConfig` controls only the in-memory ring. Durable persistence — NDJSON file, SQLite database, or anything else implementing `SnapshotStorage` — is configured separately by passing a `SharedStorage` to `Recorder::with_storage` or `ProxyClusterBuilder::storage(...)`. Mixing the two concerns into a single `persist_path` field would couple the recording cap to one specific backend; the split keeps both axes independent.
+`RecordingConfig` controls only the cluster-wide in-memory ring (the `enabled` flag and the `max_in_memory` cap that backs the assertion/query API). Durable persistence — NDJSON file, SQLite database, or anything else implementing `SnapshotStorage` — is configured **per upstream** by attaching a `Snapshots` medium when the upstream is registered (`add_upstream_with` / `add_upstream_with_mode`); see §9.1. Keeping the recording cap separate from the storage backend keeps both axes independent, and making storage per-upstream lets each upstream record to (and replay from) its own file.
 
 ### 3.4 `UpstreamTlsConfig`
 
@@ -109,14 +109,17 @@ Everything is built through `ProxyClusterBuilder`:
 let cluster = ProxyClusterBuilder::new()
     .recording(RecordingConfig { /* … */ })
     .add_middleware(GlobalAuthMiddleware)                  // applies to all upstreams
-    .add_upstream("api", api_config)                       // no middleware, no replay
+    .add_upstream("api", api_config)                       // no middleware, no snapshots
     .add_upstream_with_middleware("billing", b_cfg, b_mw)  // per-upstream middleware
-    .add_upstream_with("legacy", l_cfg, l_mw, Some(replay_source))
+    // A per-upstream snapshot medium: loaded for replay AND appended to while recording.
+    .add_upstream_with("legacy", l_cfg, l_mw, Some(Snapshots::from_storage(legacy_store, strategy)))
     // For deterministic playback against a snapshot file (no upstream dial):
-    .add_upstream_with_mode("frozen", f_cfg, f_mw, Some(snapshot), Mode::Replay)
+    .add_upstream_with_mode("frozen", f_cfg, f_mw, Some(Snapshots::from_storage(frozen_store, strategy)), Mode::Replay)
     .run()
     .await?;
 ```
+
+The `Snapshots` medium handed to an upstream drives both directions of the record/replay round-trip: at `run()` its existing contents are loaded and indexed into a replay source, and in `Mode::Record` every served exchange for that upstream is appended back to the same medium. There is no cluster-wide storage setter — give each upstream its own medium to keep recordings separate. Use `Snapshots::in_memory(exchanges, strategy)` for a replay-only source that is never written back.
 
 `run()` binds every listener, starts a shared recorder and command processor, and returns a `ClusterHandle` exposing:
 
@@ -132,12 +135,14 @@ Assertions are not exposed as a Rust API. They are driven exclusively through th
 
 | Shared across cluster | Per upstream |
 |----------------------|--------------|
-| Recorder (single buffer + persist file) | Forwarder and connection pool |
+| Recorder (single in-memory ring buffer) | Forwarder and connection pool |
 | Command channel and processor | Middleware chain (global middleware + that upstream's middleware, in that order) |
 | Global middleware | Active stubs |
 | | Pause flag and resume signal |
-| | Optional replay source |
+| | Optional `Snapshots` medium (replay source + durable recording sink) |
 | | Optional inbound TLS acceptor |
+
+The recorder's in-memory ring is cluster-wide (it backs the assertion/query API, which filters by upstream). Durable storage, by contrast, is per upstream: the recorder routes each exchange to the medium registered for its upstream name, so every upstream persists to its own file.
 
 ---
 
@@ -313,7 +318,7 @@ impl ProxyMiddleware for StripAuth {
 
 #### When and where it runs
 
-- **On record** (lifecycle stage 9): the proxy clones the request/response into a working `ProxyRequest` / `ProxyResponse`, runs `redact_request_for_snapshot` and `redact_response_for_snapshot` across the chain in registration order, **then** computes the body hash, serialises, and writes to the in-memory ring and `persist_path`. The original request/response returned to the client is untouched — the live caller still sees its `Authorization` header.
+- **On record** (lifecycle stage 9): the proxy clones the request/response into a working `ProxyRequest` / `ProxyResponse`, runs `redact_request_for_snapshot` and `redact_response_for_snapshot` across the chain in registration order, **then** computes the body hash, serialises, and writes to the in-memory ring and the upstream's durable medium (if one is attached). The original request/response returned to the client is untouched — the live caller still sees its `Authorization` header.
 - **On replay lookup** (lifecycle stage 7): before the live `ProxyRequest` is used to compute the lookup key, the proxy runs `redact_request_for_snapshot` across the chain on a working copy. The key is computed from the redacted copy. Because the snapshot on disk was written with the same redaction applied, the hashes agree and the lookup hits. The original request continues into the chain unmodified.
 
 Both calls are infallible by design — they are pure rewrites, not policy decisions. If a middleware needs to fail-stop on a missing field, it should do so in `handle`, not here.
@@ -391,6 +396,8 @@ let replay = ReplaySource::new(exchanges, MatchStrategy::MethodUriAndBodyHash);
 let replay = ReplaySource::from_jsonl(path, MatchStrategy::MethodUriAndBodyHash)?;
 ```
 
+Upstreams do not take a `ReplaySource` directly. Instead they take a `Snapshots` medium (§3.3, §4): `Snapshots::from_storage(store, strategy)` loads the source from a durable backend at `run()` *and* registers that backend as the upstream's recording sink, while `Snapshots::in_memory(exchanges, strategy)` wraps an in-memory list for replay-only use. The loaded source is consulted on the hot path exactly as described below.
+
 ### 8.1 Match strategies
 
 | Strategy | Key | Notes |
@@ -449,19 +456,23 @@ Bodies serialise as base64 in JSON; the NDJSON format is round-trippable into a 
 A single recording session can produce **10,000 to 100,000 exchanges** in one NDJSON file — long-running end-to-end suites realistically generate this volume — and the format must remain usable at that scale. Concretely:
 
 - The on-disk format is strictly one exchange per line, append-only. Loading a 100k-exchange file is a single streaming pass (no whole-file parse, no JSON-array wrapper).
-- `persist_path` writes are append-only and per-exchange — a long suite never rewrites earlier lines, so the file grows linearly and is safe to truncate or `tail -f` mid-run.
+- Storage writes are append-only and per-exchange — a long suite never rewrites earlier lines, so the file grows linearly and is safe to truncate or `tail -f` mid-run.
 - Round-tripping a 100k-line NDJSON file into a `ReplaySource` is supported and exercised; see §8.1.1 for the loader's complexity properties.
+
+Durable storage is attached per upstream via a `Snapshots` medium (§3.3, §4); the recorder holds a map from upstream name to its `SnapshotStorage` backend and appends each exchange to the medium registered for its `upstream`. Exchanges whose upstream has no attached medium (or no name) are kept in the in-memory ring only.
 
 ### 9.2 Recorder API
 
 The shared `Recorder` is cheaply cloneable and exposes async methods:
 
-- `record(exchange)` — insert (also appends to disk if `persist_path` is set). Before insertion, the exchange is passed through every middleware's `redact_request_for_snapshot` / `redact_response_for_snapshot` (see §6.4), so secrets are stripped before bytes leave the recorder. The body hash stored on the recorded request is computed *after* redaction, which is what makes hash-based replay lookups continue to work.
+- `record(exchange)` — insert into the in-memory ring, and append to the upstream's durable medium first if one is registered for `exchange.upstream`. Before insertion, the exchange is passed through every middleware's `redact_request_for_snapshot` / `redact_response_for_snapshot` (see §6.4), so secrets are stripped before bytes leave the recorder. The body hash stored on the recorded request is computed *after* redaction, which is what makes hash-based replay lookups continue to work.
 - `exchanges()` — clone the full buffer.
 - `len()`, `clear()`.
 - `any_matching(pred)`, `count_matching(pred)`, `find_matching(pred)` — predicate-based scans.
+- `storage_for(upstream)` — borrow the durable backend registered for a named upstream, if any.
+- `flush()` — fence every registered durable backend (called on shutdown).
 
-When the in-memory buffer is full, the oldest exchange is evicted.
+The durable append happens *before* the exchange lands in the in-memory ring, so a storage error stops the exchange from becoming visible to predicate scans. When the in-memory buffer is full, the oldest exchange is evicted.
 
 ### 9.3 Provenance
 
@@ -646,9 +657,11 @@ The crate does not ship a hosting binary — wiring `ProxyClusterBuilder` into a
 
 ### 20.1 Record once, replay forever
 
-1. Configure one upstream with recording enabled and a `persist_path`.
-2. Drive the system under test against the proxy. Real upstream traffic accumulates in NDJSON.
-3. In future test runs, load the NDJSON via `ReplaySource::from_jsonl` and add it to the upstream. The real upstream is no longer needed.
+1. Register the upstream in `Mode::Record` with a `Snapshots::from_storage(jsonl, strategy)` medium pointing at a fresh NDJSON file.
+2. Drive the system under test against the proxy. Real upstream traffic accumulates in that file.
+3. In future test runs, register the same upstream in `Mode::Replay` with a `Snapshots::from_storage` medium pointing at the same file. The medium is loaded into the replay source at `run()`; the real upstream is no longer needed.
+
+Because the medium is the same in both directions, a re-run in `Mode::Record` replays any request already in the file rather than re-recording it (the snapshot acts as a deduplicating cache, §8.3) and only forwards genuinely new requests. Delete the file to force a clean re-capture.
 
 ### 20.2 Ad-hoc mock for a single test
 

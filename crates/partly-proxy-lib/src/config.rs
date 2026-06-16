@@ -95,10 +95,9 @@ impl Default for UpstreamTarget {
 ///
 /// Controls the recorder's in-memory ring buffer only. Persistence —
 /// NDJSON file, `SQLite` database, or anything else implementing
-/// [`SnapshotStorage`](crate::SnapshotStorage) — is configured
-/// separately via
-/// [`Recorder::with_storage`](crate::Recorder::with_storage) or
-/// [`ProxyClusterBuilder::storage`](crate::ProxyClusterBuilder::storage).
+/// [`SnapshotStorage`](crate::SnapshotStorage) — is configured per
+/// upstream by attaching a [`Snapshots`](crate::Snapshots) medium via
+/// [`ProxyClusterBuilder::add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with).
 #[derive(Debug, Clone)]
 pub struct RecordingConfig {
     /// Whether exchanges are recorded at all.
