@@ -46,6 +46,6 @@ pub use partly_proxy_types::{
 };
 pub use proxy_io::{ProxyRequest, ProxyResponse};
 pub use recorder::Recorder;
-pub use replay::{MatchStrategy, ReplaySource, Snapshots};
+pub use replay::{ReplaySource, Snapshots};
 pub use stub::{RequestMatcher, StubEntry, StubStore, StubbedResponse};
 pub use wire::{StubFields, WireCommand, WireFilter, WireResponse};

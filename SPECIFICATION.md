@@ -25,7 +25,7 @@ The design centres on a single request lifecycle through which all behaviours �
 | Capability |
 |------------|
 | Record live upstream traffic — in-memory ring buffer, optional NDJSON disk persistence |
-| Replay from recorded snapshots — indexed by method+path+body-hash; custom matcher supported |
+| Replay from recorded snapshots — indexed by method+path+body-hash |
 | Body-aware replay matching — SHA-256 body hash |
 | Inject runtime stubs — with optional fire-count limit and artificial delay |
 | Pause/resume traffic — globally or per upstream |
@@ -156,7 +156,7 @@ Each incoming request flows through the following ordered stages. Earlier stages
 4. **Body collection** — request body is buffered into bytes for hash-based matching.
 5. **Middleware chain** — global middleware then per-upstream middleware, composed via `Next`. Each middleware decides whether to call `next.run(req, ctx).await`. The innermost call falls through to the terminal stages below.
 6. **Terminal: Stub scan** — first matching active stub wins. Honours its optional artificial `delay`. Decrements its `times` counter; removes the stub when exhausted.
-7. **Terminal: Replay lookup** — if a replay source is configured, the proxy makes a working copy of the request, runs `redact_request_for_snapshot` across the middleware chain on that copy, then looks the copy up by the chosen match strategy. A hit returns the recorded response. The original request is unchanged.
+7. **Terminal: Replay lookup** — if a replay source is configured, the proxy makes a working copy of the request, runs `redact_request_for_snapshot` across the middleware chain on that copy, then looks the copy up by its (method, path+query, body hash) key. A hit returns the recorded response. The original request is unchanged.
 8. **Terminal: Miss handling** — if no stub and no replay hit, the next step is governed by the upstream's [`Mode`](#83-mode-interactions):
     - **`Mode::Record`** — forward to the upstream. A failure here surfaces as `Err(ProxyError::Upstream*)` back through the middleware chain, where any middleware can catch and recover. If no middleware catches, the proxy returns `502 Bad Gateway`.
     - **`Mode::Replay`** — never touch the upstream. The proxy returns `503 Service Unavailable` with body `{}` and `Content-Type: application/json`.
@@ -388,32 +388,35 @@ A stub matches a request when **all** of the following hold (any unset field is 
 
 ## 8. Replay
 
-A `ReplaySource` is an immutable snapshot of recorded exchanges with a chosen match strategy:
+A `ReplaySource` is an immutable snapshot of recorded exchanges, indexed for O(1) lookup:
 
 ```rust
-let replay = ReplaySource::new(exchanges, MatchStrategy::MethodUriAndBodyHash);
+let replay = ReplaySource::new(exchanges);
 // or
-let replay = ReplaySource::from_jsonl(path, MatchStrategy::MethodUriAndBodyHash)?;
+let replay = ReplaySource::from_jsonl(path)?;
 ```
 
-Upstreams do not take a `ReplaySource` directly. Instead they take a `Snapshots` medium (§3.3, §4): `Snapshots::from_storage(store, strategy)` loads the source from a durable backend at `run()` *and* registers that backend as the upstream's recording sink, while `Snapshots::in_memory(exchanges, strategy)` wraps an in-memory list for replay-only use. The loaded source is consulted on the hot path exactly as described below.
+Upstreams do not take a `ReplaySource` directly. Instead they take a `Snapshots` medium (§3.3, §4): `Snapshots::from_storage(store)` loads the source from a durable backend at `run()` *and* registers that backend as the upstream's recording sink, while `Snapshots::in_memory(exchanges)` wraps an in-memory list for replay-only use. The loaded source is consulted on the hot path exactly as described below.
 
-### 8.1 Match strategies
+### 8.1 Match key
 
-| Strategy | Key | Notes |
-|----------|-----|-------|
-| `MethodUriAndBodyHash` (default) | (method, origin-form URI [path + query string], SHA-256 hex of body) | Distinguishes identical endpoints called with different query parameters or payloads. Query-string bytes are compared verbatim; reordered parameters are treated as a different request. |
-| `Custom(closure)` | arbitrary | `Fn(&RecordedRequest, &Request<Bytes>) -> bool` — falls back to linear scan |
+Matching is fixed: every request is keyed on **(method, origin-form URI [path + query string], SHA-256 hex of body)**. There is no pluggable match strategy — this single key is the only matching scheme.
 
-`MethodUriAndBodyHash` builds an index at construction time for O(1) lookup. `Custom` is the only other supported strategy; coarser keys (method-only, method+path) and normalised variants (query-parameter canonicalisation, method+URI ignoring query) are intentionally not provided — callers who want those semantics express them as a `Custom` closure.
+| Property | Value |
+|----------|-------|
+| Key | (method, origin-form URI [path + query string], SHA-256 hex of body) |
+| Lookup | O(1) — an index is built once at construction |
+| Query string | Compared verbatim; reordered parameters are treated as a different request |
+| Body | Compared by SHA-256, so identical endpoints called with different payloads stay distinct |
+
+Coarser keys (method-only, method+path), normalised variants (query-parameter canonicalisation, method+URI ignoring query), and arbitrary user predicates are intentionally not provided — the matching key is deliberately the same on the record and replay sides so hashes always agree.
 
 ### 8.1.1 Scale target
 
 Replay must remain usable with snapshot files containing **10,000 to 100,000 exchanges** — these are realistic sizes for a recorded end-to-end suite, not a worst case to be discouraged. Concretely:
 
 - `ReplaySource::from_jsonl(...)` parses a 100k-line file in a single pass; it does not hold the whole file in a `String` and must stream line-by-line (e.g. `BufReader::lines`) to keep peak memory bounded by the largest single exchange, not the file size.
-- Index construction for `MethodUriAndBodyHash` is O(n) in the number of exchanges; lookup remains O(1) per request regardless of snapshot size. Hash-map capacity should be preallocated from the exchange count to avoid repeated rehashing during load.
-- `Custom` matchers fall back to a linear scan, which is O(n) per request. With a 100k-exchange snapshot this is the slow path; use it sparingly or pre-filter via the upstream/path before invoking the custom predicate.
+- Index construction is O(n) in the number of exchanges; lookup remains O(1) per request regardless of snapshot size. Hash-map capacity should be preallocated from the exchange count to avoid repeated rehashing during load.
 - Memory budget at 100k exchanges with typical JSON payloads (~1–4 KiB body each) is on the order of hundreds of MiB. The proxy keeps decoded `Bytes` bodies in the source verbatim — there is no per-exchange duplication into the recorder unless `Replay + recording` is enabled.
 
 ### 8.2 Reusability

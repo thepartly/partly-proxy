@@ -4,8 +4,8 @@ use std::{net::SocketAddr, time::Duration};
 
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, ExchangeOutcome, MatchStrategy, ProxyClusterBuilder, ProxyConfig,
-    RecordedExchange, RecordingConfig, Snapshots, UpstreamTarget,
+    ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
+    RecordingConfig, Snapshots, UpstreamTarget,
 };
 use tokio::task::JoinHandle;
 
@@ -150,10 +150,7 @@ async fn ndjson_persist_file_is_replayable() {
             "upstream",
             cfg,
             Vec::new(),
-            Some(Snapshots::from_storage(
-                storage,
-                MatchStrategy::MethodUriAndBodyHash,
-            )),
+            Some(Snapshots::from_storage(storage)),
         )
         .run()
         .await
@@ -237,10 +234,7 @@ async fn custom_storage_via_per_upstream_snapshots() {
             "upstream",
             cfg,
             Vec::new(),
-            Some(Snapshots::from_storage(
-                storage.clone(),
-                MatchStrategy::MethodUriAndBodyHash,
-            )),
+            Some(Snapshots::from_storage(storage.clone())),
         )
         .run()
         .await

@@ -22,8 +22,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use partly_proxy_lib::{
-    MatchStrategy, ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage,
-    Snapshots, UpstreamTarget,
+    ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, Snapshots,
+    UpstreamTarget,
 };
 
 #[tokio::main]
@@ -55,10 +55,7 @@ async fn main() -> Result<()> {
         Some(path) => {
             let storage: SharedStorage =
                 Arc::new(partly_proxy_lib::jsonl::JsonlStorage::open(path).await?);
-            Some(Snapshots::from_storage(
-                storage,
-                MatchStrategy::MethodUriAndBodyHash,
-            ))
+            Some(Snapshots::from_storage(storage))
         }
         None => None,
     };
