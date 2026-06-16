@@ -28,7 +28,8 @@ use std::{collections::HashMap, sync::Arc};
 #[cfg(any(test, feature = "storage-jsonl"))]
 use partly_proxy_types::ProxyError;
 use partly_proxy_types::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SnapshotStorage, hash::sha256_hex,
+    ExchangeOutcome, RecordedExchange, RecordedRequest, Result, SharedStorage, SnapshotStorage,
+    hash::sha256_hex,
 };
 
 use crate::{
@@ -66,6 +67,76 @@ impl std::fmt::Debug for MatchStrategy {
             Self::MethodUriAndBodyHash => f.write_str("MethodUriAndBodyHash"),
             Self::Custom(_) => f.write_str("Custom(<closure>)"),
         }
+    }
+}
+
+/// Per-upstream snapshot medium handed to
+/// [`add_upstream_with`](crate::ProxyClusterBuilder::add_upstream_with).
+///
+/// A single `Snapshots` drives both ends of the record/replay round-trip.
+/// At cluster [`run()`](crate::ProxyClusterBuilder::run) its existing
+/// contents are loaded and indexed into a [`ReplaySource`]; in
+/// [`Mode::Record`](crate::Mode) every new exchange for that upstream is
+/// appended back to the same medium. There is no separate cluster-wide
+/// storage knob — recording is configured per upstream, here.
+pub struct Snapshots {
+    strategy: MatchStrategy,
+    source: SnapshotsSource,
+}
+
+enum SnapshotsSource {
+    /// Durable medium — loaded for replay, appended to while recording.
+    Storage(SharedStorage),
+    /// In-memory exchanges — replay only, never recorded back. Handy for
+    /// tests and fixtures that don't want to touch the filesystem.
+    InMemory(Vec<RecordedExchange>),
+}
+
+impl Snapshots {
+    /// Use a durable [`SharedStorage`] medium (e.g. a JSONL file) as both
+    /// the replay source and the recording sink for this upstream.
+    pub fn from_storage(storage: SharedStorage, strategy: MatchStrategy) -> Self {
+        Self {
+            strategy,
+            source: SnapshotsSource::Storage(storage),
+        }
+    }
+
+    /// Use an in-memory list of exchanges as a replay-only source. Nothing
+    /// recorded at runtime is written back — the medium is read-only.
+    pub fn in_memory(exchanges: Vec<RecordedExchange>, strategy: MatchStrategy) -> Self {
+        Self {
+            strategy,
+            source: SnapshotsSource::InMemory(exchanges),
+        }
+    }
+
+    /// Resolve into the replay source consulted on the hot path and, for a
+    /// durable medium, the storage handle to register as the upstream's
+    /// recording sink. Called once per upstream at cluster `run()`.
+    pub(crate) async fn resolve(self) -> Result<(ReplaySource, Option<SharedStorage>)> {
+        match self.source {
+            SnapshotsSource::Storage(storage) => {
+                let replay = ReplaySource::from_storage(storage.as_ref(), self.strategy).await?;
+                Ok((replay, Some(storage)))
+            }
+            SnapshotsSource::InMemory(exchanges) => {
+                Ok((ReplaySource::new(exchanges, self.strategy), None))
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for Snapshots {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match &self.source {
+            SnapshotsSource::Storage(_) => "Storage",
+            SnapshotsSource::InMemory(_) => "InMemory",
+        };
+        f.debug_struct("Snapshots")
+            .field("strategy", &self.strategy)
+            .field("source", &kind)
+            .finish()
     }
 }
 
@@ -478,9 +549,12 @@ mod tests {
                 .await
                 .expect("open jsonl"),
         );
-        let recorder = crate::recorder::Recorder::with_storage(
+        // Route the "api" upstream (stamped on each exchange below) to the
+        // JSONL medium so records land on disk.
+        let routes = std::collections::HashMap::from([("api".to_owned(), storage)]);
+        let recorder = crate::recorder::Recorder::with_routes(
             crate::config::RecordingConfig::in_memory(100),
-            Some(storage),
+            routes,
         );
         for n in 0..3 {
             let req = RecordedRequest::from_parts(

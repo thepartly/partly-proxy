@@ -36,6 +36,7 @@ use crate::{
     middleware::{self, SharedMiddleware, Terminal, TerminalFuture},
     proxy_io::{ProxyRequest, ProxyResponse},
     recorder::Recorder,
+    replay::ReplaySource,
     tls::build_tls_acceptor,
     upstream::UpstreamRuntime,
 };
@@ -51,6 +52,7 @@ pub(crate) struct RunningListener {
 /// Bind the listener for one upstream spec and spawn its accept loop.
 pub(crate) async fn spawn_listener(
     spec: UpstreamSpec,
+    replay: Option<ReplaySource>,
     global_middleware: Vec<SharedMiddleware>,
     recorder: Recorder,
     shutdown: watch::Receiver<Option<Duration>>,
@@ -75,7 +77,7 @@ pub(crate) async fn spawn_listener(
         forwarder,
         recorder,
         middleware,
-        spec.replay,
+        replay,
         spec.mode,
         spec.replay_miss_handler,
     ));

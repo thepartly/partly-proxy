@@ -22,7 +22,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use partly_proxy_lib::{
-    ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage, UpstreamTarget,
+    MatchStrategy, ProxyClusterBuilder, ProxyConfig, RecordingConfig, Result, SharedStorage,
+    Snapshots, UpstreamTarget,
 };
 
 #[tokio::main]
@@ -47,24 +48,31 @@ async fn main() -> Result<()> {
                 .expect("PARTLY_PROXY_TCP_CONTROL_BIND must be a valid SocketAddr")
         });
 
-    let storage: Option<SharedStorage> = match std::env::var("PARTLY_PROXY_RECORDING_PATH").ok() {
-        Some(path) => Some(Arc::new(
-            partly_proxy_lib::jsonl::JsonlStorage::open(path).await?,
-        )),
+    // Storage is configured per upstream: the same medium is loaded for
+    // replay and appended to while recording. Here the single "upstream"
+    // gets its own JSONL file when PARTLY_PROXY_RECORDING_PATH is set.
+    let snapshots: Option<Snapshots> = match std::env::var("PARTLY_PROXY_RECORDING_PATH").ok() {
+        Some(path) => {
+            let storage: SharedStorage =
+                Arc::new(partly_proxy_lib::jsonl::JsonlStorage::open(path).await?);
+            Some(Snapshots::from_storage(
+                storage,
+                MatchStrategy::MethodUriAndBodyHash,
+            ))
+        }
         None => None,
     };
 
     let mut builder = ProxyClusterBuilder::new()
         .recording(RecordingConfig::in_memory(10_000))
-        .add_upstream(
+        .add_upstream_with(
             "upstream",
             ProxyConfig::http(proxy_bind, UpstreamTarget::new(upstream_url)),
+            Vec::new(),
+            snapshots,
         );
     if let Some(addr) = tcp_control_bind {
         builder = builder.tcp_control_plane(addr);
-    }
-    if let Some(storage) = storage {
-        builder = builder.storage(storage);
     }
 
     let cluster = builder.run().await?;

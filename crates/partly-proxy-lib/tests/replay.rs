@@ -13,8 +13,8 @@ use partly_proxy_echo as echo;
 use partly_proxy_lib::{
     Command, ExchangeOutcome, MatchStrategy, Mode, Next, ProxyClusterBuilder, ProxyConfig,
     ProxyMiddleware, ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest,
-    RecordedResponse, RecordingConfig, ReplaySource, RequestContext, RequestMatcher,
-    ResponseSource, Result as ProxyResult, SharedMiddleware, StubbedResponse, UpstreamTarget,
+    RecordedResponse, RecordingConfig, RequestContext, RequestMatcher, ResponseSource,
+    Result as ProxyResult, SharedMiddleware, Snapshots, StubbedResponse, UpstreamTarget,
 };
 use tokio::task::JoinHandle;
 
@@ -80,7 +80,7 @@ async fn replay_hit_serves_recorded_response_without_touching_upstream() {
         a
     };
 
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(
             Method::GET,
             "/health",
@@ -125,7 +125,7 @@ async fn replay_mode_miss_returns_503_without_touching_upstream() {
         drop(l);
         a
     };
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
         MatchStrategy::MethodUriAndBodyHash,
     );
@@ -174,7 +174,7 @@ async fn record_mode_miss_falls_through_to_upstream() {
     // SPECIFICATION.md §8.3: in Mode::Record a replay miss falls through to
     // the upstream so the new exchange can be recorded.
     let (echo_addr, _t) = spawn_echo().await;
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/health", b"", 200, b"replayed")],
         MatchStrategy::MethodUriAndBodyHash,
     );
@@ -219,7 +219,7 @@ async fn stub_takes_priority_over_replay() {
         drop(l);
         a
     };
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"from-replay")],
         MatchStrategy::MethodUriAndBodyHash,
     );
@@ -307,7 +307,7 @@ async fn replay_lookup_uses_redact_request_for_snapshot() {
         a
     };
     let snapshot = make_recorded(Method::GET, "/secure", b"", 200, b"ok");
-    let replay = ReplaySource::new(vec![snapshot], MatchStrategy::MethodUriAndBodyHash);
+    let replay = Snapshots::in_memory(vec![snapshot], MatchStrategy::MethodUriAndBodyHash);
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with(
             "api",
@@ -343,7 +343,7 @@ async fn replay_records_served_exchanges_when_recording_enabled() {
         drop(l);
         a
     };
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"replay-body")],
         MatchStrategy::MethodUriAndBodyHash,
     );
@@ -471,7 +471,7 @@ async fn response_source_stub_marks_ctx() {
 #[tokio::test]
 async fn response_source_snapshot_marks_ctx() {
     let captured = Arc::new(Mutex::new(None));
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"replayed")],
         MatchStrategy::MethodUriAndBodyHash,
     );
@@ -502,7 +502,7 @@ async fn response_source_snapshot_marks_ctx() {
 #[tokio::test]
 async fn response_source_replay_miss_marks_ctx() {
     let captured = Arc::new(Mutex::new(None));
-    let replay = ReplaySource::new(
+    let replay = Snapshots::in_memory(
         vec![make_recorded(Method::GET, "/x", b"", 200, b"replayed")],
         MatchStrategy::MethodUriAndBodyHash,
     );
