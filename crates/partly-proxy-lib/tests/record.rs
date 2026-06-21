@@ -1,11 +1,14 @@
 //! End-to-end recording through a real listener + forwarder.
 
-use std::{net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+use bytes::Bytes;
+use http::{HeaderMap, Method};
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
     ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
-    RecordingConfig, UpstreamTarget,
+    RecordedRequest, RecordedResponse, RecordingConfig, SharedStorage, SnapshotStorage,
+    UpstreamTarget, jsonl::JsonlStorage,
 };
 use tokio::task::JoinHandle;
 
@@ -280,6 +283,121 @@ async fn disabled_recording_keeps_buffer_empty() {
         assert_eq!(cluster.recorder().len().await, 0);
     }
     cluster.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Regression test for the `Mode::Record` deduplicating-snapshot cache.
+//
+// SPECIFICATION.md §8.3 and §20.1 require that, in `Mode::Record`, a request
+// already present in the snapshot is *replayed* and **not re-recorded** — "the
+// snapshot acts as a deduplicating cache so already-seen requests do not re-hit
+// the upstream", and a re-run "replays any request already in the file rather
+// than re-recording it". The lifecycle previously recorded every served
+// exchange unconditionally, so a replay hit appended a duplicate on every hit.
+// ---------------------------------------------------------------------------
+
+/// Number of non-blank NDJSON lines currently on disk at `path`.
+async fn ndjson_line_count(path: &std::path::Path) -> usize {
+    let raw = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    raw.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+/// Write a single recorded exchange into a fresh NDJSON file at `path`.
+async fn seed_snapshot(
+    path: &std::path::Path,
+    method: Method,
+    uri: &str,
+    req_body: &[u8],
+    resp_body: &[u8],
+) {
+    let req = RecordedRequest::from_parts(
+        &method,
+        &uri.parse().unwrap(),
+        &HeaderMap::new(),
+        Bytes::copy_from_slice(req_body),
+    );
+    let resp = RecordedResponse {
+        status: 200,
+        headers: Vec::new(),
+        body: Bytes::copy_from_slice(resp_body),
+    };
+    let storage = JsonlStorage::open(path).await.unwrap();
+    storage
+        .append(&RecordedExchange::new(
+            Some("upstream".to_owned()),
+            req,
+            ExchangeOutcome::Response(resp),
+            Duration::from_millis(1),
+        ))
+        .await
+        .unwrap();
+    storage.flush().await.unwrap();
+    drop(storage);
+}
+
+/// An address that nothing is listening on — any forward to it fails, which
+/// lets a test prove a response came from the replay snapshot (not the
+/// upstream).
+async fn unreachable_addr() -> SocketAddr {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let a = l.local_addr().unwrap();
+    drop(l);
+    a
+}
+
+/// Bug: "It multiplies records for existing requests."
+///
+/// A request already present in the snapshot file is served from the snapshot
+/// (proved here by pointing the upstream at an unreachable address: a forward
+/// would 502), but the recorder appended it a second time, so the file grew
+/// from one line to two. Per §8.3/§20.1 it must stay at one line.
+#[tokio::test]
+async fn record_mode_does_not_re_record_request_already_in_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.ndjson");
+    seed_snapshot(&path, Method::POST, "/existing", b"hello", b"FROM-SNAPSHOT").await;
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "seed should write one line"
+    );
+
+    let storage: SharedStorage = Arc::new(JsonlStorage::open(&path).await.unwrap());
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{}", unreachable_addr().await))
+            .with_connect_timeout(Duration::from_millis(500))
+            .with_request_timeout(Duration::from_secs(2)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage))
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("upstream").unwrap();
+
+    let resp = http_client()
+        .post(format!("http://{proxy}/existing"))
+        .body("hello")
+        .send()
+        .await
+        .unwrap();
+    // 200 + the snapshot body proves the request was replayed, not forwarded
+    // (the unreachable upstream would have produced a 502).
+    assert_eq!(resp.status(), 200, "request in snapshot must be replayed");
+    assert_eq!(resp.text().await.unwrap(), "FROM-SNAPSHOT");
+
+    // Give the recorder ample time to (wrongly) append a duplicate.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cluster.shutdown().await.unwrap();
+
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "a request already present in the snapshot must NOT be re-recorded \
+         (SPECIFICATION.md §8.3/§20.1: the snapshot is a deduplicating cache)"
+    );
 }
 
 /// Poll the recorder until it reaches at least `target` exchanges or times

@@ -316,6 +316,7 @@ async fn handle_request(
                     &runtime_for_block,
                     &original_request,
                     &resp,
+                    ctx.response_source(),
                     started.elapsed(),
                 )
                 .await;
@@ -419,9 +420,16 @@ async fn record_success_exchange(
     runtime: &UpstreamRuntime,
     original_request: &ProxyRequest,
     final_response: &ProxyResponse,
+    source: Option<ResponseSource>,
     duration: std::time::Duration,
 ) {
     if !runtime.recorder.is_enabled() {
+        return;
+    }
+    // Deduplicating cache (SPECIFICATION.md §8.3/§20.1): a response served from
+    // the replay snapshot is already on record — recording it again would
+    // multiply entries for an already-seen request.
+    if source == Some(ResponseSource::Snapshot) {
         return;
     }
     let (recorded_req, recorded_resp) = build_recorded(runtime, original_request, final_response);

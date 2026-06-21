@@ -123,7 +123,7 @@ let cluster = ProxyClusterBuilder::new()
     .await?;
 ```
 
-The storage backend handed to an upstream drives both directions of the record/replay round-trip: at `run()` its existing contents (via `SnapshotStorage::load`) are loaded and indexed into an internal replay source, and in `Mode::Record` every served exchange for that upstream is appended back to the same backend. There is no cluster-wide storage setter — give each upstream its own backend to keep recordings separate. Use `InMemoryStorage` (seeded from a `Vec<RecordedExchange>`) for a filesystem-free replay/fixture backend.
+The storage backend handed to an upstream drives both directions of the record/replay round-trip: at `run()` its existing contents (via `SnapshotStorage::load`) are loaded and indexed into an internal replay source, and in `Mode::Record` every *newly forwarded* exchange for that upstream is appended back to the same backend. Requests that the replay source already answers are served from it and are **not** appended again — the backend is a deduplicating cache, not an append-on-every-request log (see §8.3 and §20.1). There is no cluster-wide storage setter — give each upstream its own backend to keep recordings separate. Use `InMemoryStorage` (seeded from a `Vec<RecordedExchange>`) for a filesystem-free replay/fixture backend.
 
 `run()` binds every listener, starts a shared recorder and command processor, and returns a `ClusterHandle` exposing:
 

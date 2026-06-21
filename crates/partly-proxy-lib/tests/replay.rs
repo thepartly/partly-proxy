@@ -343,10 +343,13 @@ async fn replay_lookup_uses_redact_request_for_snapshot() {
 }
 
 #[tokio::test]
-async fn replay_records_served_exchanges_when_recording_enabled() {
-    // §8.3 says "Every served exchange — whether the response came from a
-    // middleware short-circuit, a stub, or replay — is recorded under the
-    // upstream name".
+async fn record_mode_does_not_re_record_a_replay_hit() {
+    // SPECIFICATION.md §8.3/§20.1: in `Mode::Record` the snapshot is a
+    // deduplicating cache — a request already present is replayed "rather than
+    // re-recording it". Serving a replay hit must therefore NOT append another
+    // copy to the recorder (which would multiply entries for an already-seen
+    // request). The upstream is unreachable, so a 200 + the snapshot body also
+    // proves the request was replayed, not forwarded.
     let unreachable = {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let a = l.local_addr().unwrap();
@@ -373,33 +376,25 @@ async fn replay_records_served_exchanges_when_recording_enabled() {
         .unwrap();
     let proxy = cluster.addr("api").unwrap();
 
-    let _ = http_client()
+    let resp = http_client()
         .get(format!("http://{proxy}/x"))
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
         .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "replay hit, not a forward to the dead upstream"
+    );
+    assert_eq!(resp.text().await.unwrap(), "replay-body");
 
-    // Wait until the recorder has caught up.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        if cluster.recorder().len().await >= 1 {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let exchanges = cluster.recorder().exchanges().await;
-    assert_eq!(exchanges.len(), 1);
-    let resp = exchanges[0]
-        .outcome
-        .as_response()
-        .expect("response outcome");
-    assert_eq!(resp.body, Bytes::from_static(b"replay-body"));
+    // Give the recorder ample time to (wrongly) append the replayed exchange.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        cluster.recorder().len().await,
+        0,
+        "a replayed request is already on record and must not be recorded again"
+    );
 
     cluster.shutdown().await.unwrap();
 }
