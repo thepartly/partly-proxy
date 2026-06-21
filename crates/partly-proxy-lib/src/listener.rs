@@ -433,13 +433,24 @@ async fn record_success_exchange(
         return;
     }
     let (recorded_req, recorded_resp) = build_recorded(runtime, original_request, final_response);
-    persist_exchange(
-        runtime,
+    let exchange = RecordedExchange::new(
+        Some(runtime.name.clone()),
         recorded_req,
         ExchangeOutcome::Response(recorded_resp),
         duration,
-    )
-    .await;
+    );
+    // Promote a genuinely forwarded exchange into the live replay index so a
+    // later identical request replays it instead of re-forwarding and
+    // re-recording — this is what makes the cache deduplicate within a single
+    // run, even one started from an empty snapshot file.
+    if source == Some(ResponseSource::Upstream) {
+        if let Some(replay) = &runtime.replay {
+            replay.insert(exchange.clone());
+        }
+    }
+    if let Err(e) = runtime.recorder.record(exchange).await {
+        tracing::warn!(name = %runtime.name, "recorder rejected exchange: {e}");
+    }
 }
 
 async fn record_error_exchange(

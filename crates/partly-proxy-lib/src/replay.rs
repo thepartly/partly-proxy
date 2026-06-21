@@ -16,7 +16,10 @@
 //! a live `Authorization` header still matches a snapshot recorded with
 //! that header stripped.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 // `ProxyError` is only constructed in the storage-error test below.
 #[cfg(test)]
@@ -42,6 +45,14 @@ pub(crate) struct ReplaySource {
 }
 
 struct ReplaySourceInner {
+    /// Guarded so `Mode::Record` can promote freshly forwarded exchanges into
+    /// the index mid-run (see [`ReplaySource::insert`]). Critical sections are
+    /// short and never `.await`, so a `std::sync::RwLock` is appropriate even
+    /// on the async hot path.
+    state: RwLock<ReplayState>,
+}
+
+struct ReplayState {
     exchanges: Vec<RecordedExchange>,
     /// Maps the lookup key to an index into `exchanges`. The *first*
     /// exchange written for a given key wins on collision — that way
@@ -51,9 +62,10 @@ struct ReplaySourceInner {
 
 impl std::fmt::Debug for ReplaySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.state.read().expect("replay lock poisoned");
         f.debug_struct("ReplaySource")
-            .field("exchanges", &self.inner.exchanges.len())
-            .field("index", &self.inner.index.len())
+            .field("exchanges", &state.exchanges.len())
+            .field("index", &state.index.len())
             .finish_non_exhaustive()
     }
 }
@@ -63,7 +75,9 @@ impl ReplaySource {
     pub(crate) fn new(exchanges: Vec<RecordedExchange>) -> Self {
         let index = build_index(&exchanges);
         Self {
-            inner: Arc::new(ReplaySourceInner { exchanges, index }),
+            inner: Arc::new(ReplaySourceInner {
+                state: RwLock::new(ReplayState { exchanges, index }),
+            }),
         }
     }
 
@@ -86,7 +100,41 @@ impl ReplaySource {
     /// Number of exchanges in the source. Test-only introspection.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.inner.exchanges.len()
+        self.inner
+            .state
+            .read()
+            .expect("replay lock poisoned")
+            .exchanges
+            .len()
+    }
+
+    /// Add a freshly recorded exchange to the live index so a subsequent
+    /// identical request replays it instead of re-forwarding and re-recording.
+    ///
+    /// This is what makes `Mode::Record`'s deduplicating cache
+    /// (`SPECIFICATION.md` §8.3/§20.1) work *within* a single run — including
+    /// one that started from an empty snapshot file: the first forward of a
+    /// request is recorded and promoted here, and every later identical request
+    /// becomes a replay hit. Only `Response` outcomes are indexed (errors are
+    /// never replayed), and the first entry for a key wins, matching
+    /// [`build_index`].
+    pub(crate) fn insert(&self, exchange: RecordedExchange) {
+        if !matches!(exchange.outcome, ExchangeOutcome::Response(_)) {
+            return;
+        }
+        let key = (
+            exchange.request.method.clone(),
+            path_and_query_of_str(&exchange.request.uri),
+            exchange.request.body_sha256.clone(),
+        );
+        let mut state = self.inner.state.write().expect("replay lock poisoned");
+        if state.index.contains_key(&key) {
+            // First write wins — an entry for this key already replays.
+            return;
+        }
+        let idx = state.exchanges.len();
+        state.exchanges.push(exchange);
+        state.index.insert(key, idx);
     }
 
     /// Look up a response for `req`. Returns `None` on miss or on a hit with
@@ -108,11 +156,11 @@ impl ReplaySource {
             path_and_query_of_uri(&redacted.uri),
             sha256_hex(&redacted.body),
         );
-        let exchange = self
-            .inner
+        let state = self.inner.state.read().expect("replay lock poisoned");
+        let exchange = state
             .index
             .get(&key)
-            .and_then(|&i| self.inner.exchanges.get(i))?;
+            .and_then(|&i| state.exchanges.get(i))?;
         match &exchange.outcome {
             ExchangeOutcome::Response(r) => Some(ProxyResponse {
                 status: r.status(),
