@@ -10,11 +10,53 @@ use std::{net::SocketAddr, path::Path, time::Duration};
 
 use bytes::Bytes;
 use http::{HeaderMap, Method};
+use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ExchangeOutcome, RecordedExchange, RecordedRequest, RecordedResponse, SnapshotStorage,
-    jsonl::JsonlStorage,
+    ExchangeOutcome, ProxyConfig, RecordedExchange, RecordedRequest, RecordedResponse,
+    SnapshotStorage, UpstreamTarget, jsonl::JsonlStorage,
 };
-use tokio::io::AsyncBufReadExt;
+use tokio::{io::AsyncBufReadExt, task::JoinHandle};
+
+/// Bind an in-process echo upstream on an ephemeral port and serve it on a
+/// background task. Returns the bound address and the task handle.
+pub async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
+    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let task = tokio::spawn(async move {
+        let _ = echo::serve(listener).await;
+    });
+    (addr, task)
+}
+
+/// A reqwest client that ignores any ambient proxy env vars and times out
+/// after 5s — the standard client for driving the proxy from a test.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client builds")
+}
+
+/// A `ProxyConfig` bound to an ephemeral port, forwarding to `url` with short
+/// (1s connect / 5s request) test timeouts.
+pub fn cfg(url: String) -> ProxyConfig {
+    ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(url)
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    )
+}
+
+/// An address that nothing is listening on — bind an ephemeral port, capture
+/// it, then drop the listener. Any forward to it fails, which lets a test
+/// prove a response came from a stub/replay rather than the upstream.
+pub fn unreachable_addr() -> SocketAddr {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let a = l.local_addr().unwrap();
+    drop(l);
+    a
+}
 
 /// Count non-blank NDJSON lines at `path`, streaming line-by-line so it stays
 /// cheap on large snapshot files. A missing file counts as zero.
@@ -63,14 +105,4 @@ pub async fn seed_snapshot(
         .unwrap();
     storage.flush().await.unwrap();
     drop(storage);
-}
-
-/// An address that nothing is listening on — any forward to it fails, which
-/// lets a test prove a response came from the replay snapshot (not the
-/// upstream).
-pub async fn unreachable_addr() -> SocketAddr {
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let a = l.local_addr().unwrap();
-    drop(l);
-    a
 }

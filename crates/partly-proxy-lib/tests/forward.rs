@@ -6,42 +6,20 @@
 //! reqwest client. We never reach the public internet — the upstream is
 //! always in the same tokio runtime.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{ClusterHandle, ProxyClusterBuilder, ProxyConfig, UpstreamTarget};
-use tokio::task::JoinHandle;
 
-/// Spawn the echo upstream on 127.0.0.1:0 and return (addr, task).
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
+mod common;
+use common::{cfg, http_client, spawn_echo, unreachable_addr};
 
 /// Spawn the proxy in front of an upstream URL and return the cluster handle.
 async fn spawn_proxy(upstream_url: String) -> ClusterHandle {
-    let cfg = ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(upstream_url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    );
     ProxyClusterBuilder::new()
-        .add_upstream("upstream", cfg)
+        .add_upstream("upstream", cfg(upstream_url))
         .run()
         .await
         .expect("cluster builds")
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest client builds")
 }
 
 #[tokio::test]
@@ -119,14 +97,7 @@ async fn upstream_status_is_proxied_verbatim() {
 
 #[tokio::test]
 async fn unreachable_upstream_yields_502() {
-    // Bind a listener, capture its addr, then drop the listener so the port
-    // is free for the test window. The upstream URL will refuse connections.
-    let unreachable = {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let a = l.local_addr().unwrap();
-        drop(l);
-        a
-    };
+    let unreachable = unreachable_addr();
     let cluster = spawn_proxy(format!("http://{unreachable}")).await;
     let proxy_addr = cluster.addr("upstream").unwrap();
 

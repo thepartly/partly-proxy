@@ -1,7 +1,6 @@
 //! Replay layered with middleware, stubs and the live forwarder.
 
 use std::{
-    net::SocketAddr,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -9,39 +8,15 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    Command, ExchangeOutcome, InMemoryStorage, Mode, Next, ProxyClusterBuilder, ProxyConfig,
-    ProxyMiddleware, ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest,
-    RecordedResponse, RecordingConfig, RequestContext, RequestMatcher, ResponseSource,
-    Result as ProxyResult, SharedMiddleware, SharedStorage, StubbedResponse, UpstreamTarget,
+    Command, ExchangeOutcome, InMemoryStorage, Mode, Next, ProxyClusterBuilder, ProxyMiddleware,
+    ProxyRequest, ProxyResponse, RecordedExchange, RecordedRequest, RecordedResponse,
+    RecordingConfig, RequestContext, RequestMatcher, ResponseSource, Result as ProxyResult,
+    SharedMiddleware, SharedStorage, StubbedResponse,
 };
-use tokio::task::JoinHandle;
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
-}
-
-fn cfg(url: String) -> ProxyConfig {
-    ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    )
-}
+mod common;
+use common::{cfg, http_client, spawn_echo, unreachable_addr};
 
 fn in_memory_store(exchanges: Vec<RecordedExchange>) -> SharedStorage {
     Arc::new(InMemoryStorage::from(exchanges))
@@ -430,13 +405,6 @@ impl ProxyMiddleware for ShortCircuit {
     ) -> ProxyResult<ProxyResponse> {
         Ok(ProxyResponse::new(StatusCode::IM_A_TEAPOT).with_body(Bytes::from_static(b"short")))
     }
-}
-
-fn unreachable_addr() -> SocketAddr {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let a = l.local_addr().unwrap();
-    drop(l);
-    a
 }
 
 #[tokio::test]

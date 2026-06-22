@@ -1,47 +1,23 @@
 //! End-to-end recording through a real listener + forwarder.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use http::Method;
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{
     ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
     RecordingConfig, SharedStorage, UpstreamTarget, jsonl::JsonlStorage,
 };
-use tokio::task::JoinHandle;
 
 mod common;
-use common::{ndjson_line_count, seed_snapshot, unreachable_addr};
-
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
+use common::{cfg, http_client, ndjson_line_count, seed_snapshot, spawn_echo, unreachable_addr};
 
 async fn spawn_proxy(upstream_url: String, recording: RecordingConfig) -> ClusterHandle {
-    let cfg = ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(upstream_url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    );
     ProxyClusterBuilder::new()
         .recording(recording)
-        .add_upstream("upstream", cfg)
+        .add_upstream("upstream", cfg(upstream_url))
         .run()
         .await
         .expect("cluster builds")
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest client builds")
 }
 
 #[tokio::test]
@@ -96,7 +72,7 @@ async fn successful_exchange_is_recorded_in_memory() {
 
 #[tokio::test]
 async fn unreachable_upstream_records_error_outcome() {
-    let unreachable = unreachable_addr().await;
+    let unreachable = unreachable_addr();
     let cluster = spawn_proxy(
         format!("http://{unreachable}"),
         RecordingConfig::in_memory(10),
@@ -300,7 +276,7 @@ async fn record_mode_does_not_re_record_request_already_in_snapshot() {
     let storage: SharedStorage = Arc::new(JsonlStorage::open(&path).await.unwrap());
     let cfg = ProxyConfig::http(
         "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(format!("http://{}", unreachable_addr().await))
+        UpstreamTarget::new(format!("http://{}", unreachable_addr()))
             .with_connect_timeout(Duration::from_millis(500))
             .with_request_timeout(Duration::from_secs(2)),
     );

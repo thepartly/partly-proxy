@@ -1,42 +1,14 @@
 //! Wait-for semantics of `AssertSeen` and `AssertCount` (see
 //! `SPECIFICATION.md` §14.1).
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    Command, CommandResponse, ProxyClusterBuilder, ProxyConfig, RecordingConfig, TrafficFilter,
-    UpstreamTarget,
+    Command, CommandResponse, ProxyClusterBuilder, RecordingConfig, TrafficFilter,
 };
-use tokio::task::JoinHandle;
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
-}
-
-fn cfg(url: String) -> ProxyConfig {
-    ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    )
-}
+mod common;
+use common::{cfg, http_client, spawn_echo};
 
 #[tokio::test]
 async fn assert_seen_blocks_until_traffic_arrives() {

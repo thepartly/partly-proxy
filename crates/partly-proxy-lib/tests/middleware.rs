@@ -2,7 +2,6 @@
 //! rewrites, short-circuits, recovery, and snapshot-boundary redaction.
 
 use std::{
-    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -13,38 +12,13 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::StatusCode;
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    ClusterHandle, Next, ProxyClusterBuilder, ProxyConfig, ProxyMiddleware, ProxyRequest,
-    ProxyResponse, RecordingConfig, RequestContext, Result as ProxyResult, SharedMiddleware,
-    UpstreamTarget,
+    ClusterHandle, Next, ProxyClusterBuilder, ProxyMiddleware, ProxyRequest, ProxyResponse,
+    RecordingConfig, RequestContext, Result as ProxyResult, SharedMiddleware,
 };
-use tokio::task::JoinHandle;
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest client builds")
-}
-
-fn upstream_cfg(url: String) -> ProxyConfig {
-    ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    )
-}
+mod common;
+use common::{cfg, http_client, spawn_echo};
 
 struct ShortCircuit200;
 
@@ -71,7 +45,7 @@ async fn short_circuit_middleware_skips_forwarding() {
         .recording(RecordingConfig::in_memory(10))
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{echo_addr}")),
+            cfg(format!("http://{echo_addr}")),
             vec![Arc::new(ShortCircuit200) as SharedMiddleware],
         )
         .run()
@@ -122,7 +96,7 @@ async fn response_body_rewrite_lands_on_the_wire() {
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{echo_addr}")),
+            cfg(format!("http://{echo_addr}")),
             vec![Arc::new(PrefixBody { prefix: b"PREFIX:" }) as SharedMiddleware],
         )
         .run()
@@ -169,7 +143,7 @@ async fn request_body_rewrite_reaches_upstream() {
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{echo_addr}")),
+            cfg(format!("http://{echo_addr}")),
             vec![Arc::new(RewriteRequestBody {
                 new_body: b"REWRITTEN",
             }) as SharedMiddleware],
@@ -225,7 +199,7 @@ async fn middleware_can_recover_from_upstream_failure() {
     let cluster = ProxyClusterBuilder::new()
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{unreachable}")),
+            cfg(format!("http://{unreachable}")),
             vec![Arc::new(Recover) as SharedMiddleware],
         )
         .run()
@@ -280,7 +254,7 @@ async fn snapshot_redaction_strips_secrets_from_recorder_only() {
         .recording(RecordingConfig::in_memory(10))
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{echo_addr}")),
+            cfg(format!("http://{echo_addr}")),
             vec![Arc::new(StripAuth) as SharedMiddleware],
         )
         .run()
@@ -367,7 +341,7 @@ async fn global_middleware_runs_before_per_upstream() {
         .add_middleware(global)
         .add_upstream_with_middleware(
             "api",
-            upstream_cfg(format!("http://{echo_addr}")),
+            cfg(format!("http://{echo_addr}")),
             vec![Arc::new(local) as SharedMiddleware],
         )
         .run()

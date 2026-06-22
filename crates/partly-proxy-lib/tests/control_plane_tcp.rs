@@ -2,29 +2,14 @@
 
 use std::{net::SocketAddr, time::Duration};
 
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{ProxyClusterBuilder, ProxyConfig, RecordingConfig, UpstreamTarget};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
-    task::JoinHandle,
 };
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
-}
+mod common;
+use common::{http_client, spawn_echo};
 
 /// Send one JSON line, return the next response line.
 async fn rt(addr: SocketAddr, line: &str) -> serde_json::Value {
