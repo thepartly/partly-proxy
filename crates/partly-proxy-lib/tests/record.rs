@@ -206,9 +206,12 @@ async fn custom_storage_via_per_upstream_snapshots() {
         .unwrap();
     let proxy = cluster.addr("upstream").unwrap();
 
-    for _ in 0..3 {
+    // Distinct paths so each request is genuinely new: in `Mode::Record` the
+    // snapshot is a deduplicating cache, so three *identical* requests would
+    // collapse to a single append (the later two replay the first).
+    for n in 0..3 {
         let _ = http_client()
-            .get(format!("http://{proxy}/x"))
+            .get(format!("http://{proxy}/x/{n}"))
             .send()
             .await
             .unwrap()
@@ -235,7 +238,7 @@ async fn custom_storage_via_per_upstream_snapshots() {
     let saved = storage.appended.lock().await.clone();
     assert_eq!(saved.len(), 3);
     for (i, ex) in saved.iter().enumerate() {
-        assert_eq!(ex.request.uri, "/x", "exchange {i}");
+        assert_eq!(ex.request.uri, format!("/x/{i}"), "exchange {i}");
     }
 }
 
@@ -308,6 +311,102 @@ async fn record_mode_does_not_re_record_request_already_in_snapshot() {
         1,
         "a request already present in the snapshot must NOT be re-recorded \
          (SPECIFICATION.md §8.3/§20.1: the snapshot is a deduplicating cache)"
+    );
+}
+
+/// Starting from an existing-but-empty snapshot file, the same request is sent
+/// twice. The first forwards to the upstream and is recorded; the second must
+/// hit that just-recorded snapshot and be served without a second recording.
+/// If the freshly recorded exchange is not promoted into the live replay
+/// index, the second request is treated as new and recorded again — leaving
+/// two copies in the file instead of one.
+#[tokio::test]
+async fn record_mode_from_empty_file_dedupes_repeated_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.ndjson");
+    // File exists but is empty.
+    tokio::fs::File::create(&path).await.unwrap();
+    assert_eq!(ndjson_line_count(&path).await, 0);
+
+    let (echo_addr, _echo_task) = spawn_echo().await;
+    let storage: SharedStorage = Arc::new(JsonlStorage::open(&path).await.unwrap());
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{echo_addr}"))
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage))
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("upstream").unwrap();
+
+    for _ in 0..2 {
+        let _ = http_client()
+            .get(format!("http://{proxy}/dup"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    cluster.shutdown().await.unwrap();
+
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "the second identical request must be served from the freshly recorded \
+         snapshot and not recorded again (SPECIFICATION.md §8.3 deduplicating cache)"
+    );
+}
+
+/// Guard (passes today): an existing-but-empty snapshot file must not suppress
+/// recording of a genuinely new request. This pins the *other* half of the
+/// dedup contract so a fix for the two regressions above cannot over-correct
+/// into dropping new records.
+#[tokio::test]
+async fn record_mode_from_empty_file_still_records_new_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.ndjson");
+    tokio::fs::File::create(&path).await.unwrap();
+
+    let (echo_addr, _echo_task) = spawn_echo().await;
+    let storage: SharedStorage = Arc::new(JsonlStorage::open(&path).await.unwrap());
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{echo_addr}"))
+            .with_connect_timeout(Duration::from_secs(1))
+            .with_request_timeout(Duration::from_secs(5)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage))
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("upstream").unwrap();
+
+    let _ = http_client()
+        .post(format!("http://{proxy}/brand-new"))
+        .body("payload")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let _ = wait_for_exchanges(cluster.recorder(), 1).await;
+    cluster.shutdown().await.unwrap();
+
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "a new request against an empty snapshot file must be recorded"
     );
 }
 
