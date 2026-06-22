@@ -1,43 +1,23 @@
 //! End-to-end recording through a real listener + forwarder.
 
-use std::{net::SocketAddr, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use partly_proxy_echo as echo;
+use http::Method;
 use partly_proxy_lib::{
     ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
-    RecordingConfig, UpstreamTarget,
+    RecordingConfig, SharedStorage, UpstreamTarget, jsonl::JsonlStorage,
 };
-use tokio::task::JoinHandle;
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
+mod common;
+use common::{cfg, http_client, ndjson_line_count, seed_snapshot, spawn_echo, unreachable_addr};
 
 async fn spawn_proxy(upstream_url: String, recording: RecordingConfig) -> ClusterHandle {
-    let cfg = ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(upstream_url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    );
     ProxyClusterBuilder::new()
         .recording(recording)
-        .add_upstream("upstream", cfg)
+        .add_upstream("upstream", cfg(upstream_url))
         .run()
         .await
         .expect("cluster builds")
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest client builds")
 }
 
 #[tokio::test]
@@ -92,12 +72,7 @@ async fn successful_exchange_is_recorded_in_memory() {
 
 #[tokio::test]
 async fn unreachable_upstream_records_error_outcome() {
-    let unreachable = {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let a = l.local_addr().unwrap();
-        drop(l);
-        a
-    };
+    let unreachable = unreachable_addr();
     let cluster = spawn_proxy(
         format!("http://{unreachable}"),
         RecordingConfig::in_memory(10),
@@ -280,6 +255,60 @@ async fn disabled_recording_keeps_buffer_empty() {
         assert_eq!(cluster.recorder().len().await, 0);
     }
     cluster.shutdown().await.unwrap();
+}
+
+/// A request already present in the snapshot file is served from the snapshot
+/// (proved here by pointing the upstream at an unreachable address: a forward
+/// would 502), but the recorder appended it a second time, so the file grew
+/// from one line to two. Per SPECIFICATION.md §8.3/§20.1 the snapshot is a
+/// deduplicating cache, so it must stay at one line.
+#[tokio::test]
+async fn record_mode_does_not_re_record_request_already_in_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.ndjson");
+    seed_snapshot(&path, Method::POST, "/existing", b"hello", b"FROM-SNAPSHOT").await;
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "seed should write one line"
+    );
+
+    let storage: SharedStorage = Arc::new(JsonlStorage::open(&path).await.unwrap());
+    let cfg = ProxyConfig::http(
+        "127.0.0.1:0".parse().unwrap(),
+        UpstreamTarget::new(format!("http://{}", unreachable_addr()))
+            .with_connect_timeout(Duration::from_millis(500))
+            .with_request_timeout(Duration::from_secs(2)),
+    );
+    let cluster = ProxyClusterBuilder::new()
+        .recording(RecordingConfig::in_memory(100))
+        .add_upstream_with("upstream", cfg, Vec::new(), Some(storage))
+        .run()
+        .await
+        .unwrap();
+    let proxy = cluster.addr("upstream").unwrap();
+
+    let resp = http_client()
+        .post(format!("http://{proxy}/existing"))
+        .body("hello")
+        .send()
+        .await
+        .unwrap();
+    // 200 + the snapshot body proves the request was replayed, not forwarded
+    // (the unreachable upstream would have produced a 502).
+    assert_eq!(resp.status(), 200, "request in snapshot must be replayed");
+    assert_eq!(resp.text().await.unwrap(), "FROM-SNAPSHOT");
+
+    // Give the recorder ample time to (wrongly) append a duplicate.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cluster.shutdown().await.unwrap();
+
+    assert_eq!(
+        ndjson_line_count(&path).await,
+        1,
+        "a request already present in the snapshot must NOT be re-recorded \
+         (SPECIFICATION.md §8.3/§20.1: the snapshot is a deduplicating cache)"
+    );
 }
 
 /// Poll the recorder until it reaches at least `target` exchanges or times

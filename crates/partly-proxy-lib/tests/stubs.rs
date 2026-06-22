@@ -1,41 +1,17 @@
 //! Stubs, pause/resume, and the in-process command plane driving the
 //! live listener.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use bytes::Bytes;
 use http::StatusCode;
-use partly_proxy_echo as echo;
 use partly_proxy_lib::{
-    Command, CommandResponse, ProxyClusterBuilder, ProxyConfig, RecordingConfig, RequestMatcher,
-    StubbedResponse, TrafficFilter, UpstreamTarget,
+    Command, CommandResponse, ProxyClusterBuilder, RecordingConfig, RequestMatcher,
+    StubbedResponse, TrafficFilter,
 };
-use tokio::task::JoinHandle;
 
-async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
-    let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = echo::serve(listener).await;
-    });
-    (addr, task)
-}
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
-}
-
-fn cfg(url: String) -> ProxyConfig {
-    ProxyConfig::http(
-        "127.0.0.1:0".parse().unwrap(),
-        UpstreamTarget::new(url)
-            .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(5)),
-    )
-}
+mod common;
+use common::{cfg, http_client, spawn_echo};
 
 #[tokio::test]
 async fn stub_overrides_upstream_response() {
