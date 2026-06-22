@@ -2,15 +2,16 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use bytes::Bytes;
-use http::{HeaderMap, Method};
+use http::Method;
 use partly_proxy_echo as echo;
 use partly_proxy_lib::{
     ClusterHandle, ExchangeOutcome, ProxyClusterBuilder, ProxyConfig, RecordedExchange,
-    RecordedRequest, RecordedResponse, RecordingConfig, SharedStorage, SnapshotStorage,
-    UpstreamTarget, jsonl::JsonlStorage,
+    RecordingConfig, SharedStorage, UpstreamTarget, jsonl::JsonlStorage,
 };
 use tokio::task::JoinHandle;
+
+mod common;
+use common::{ndjson_line_count, seed_snapshot, unreachable_addr};
 
 async fn spawn_echo() -> (SocketAddr, JoinHandle<()>) {
     let (addr, listener) = echo::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
@@ -95,12 +96,7 @@ async fn successful_exchange_is_recorded_in_memory() {
 
 #[tokio::test]
 async fn unreachable_upstream_records_error_outcome() {
-    let unreachable = {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let a = l.local_addr().unwrap();
-        drop(l);
-        a
-    };
+    let unreachable = unreachable_addr().await;
     let cluster = spawn_proxy(
         format!("http://{unreachable}"),
         RecordingConfig::in_memory(10),
@@ -285,72 +281,11 @@ async fn disabled_recording_keeps_buffer_empty() {
     cluster.shutdown().await.unwrap();
 }
 
-// ---------------------------------------------------------------------------
-// Regression test for the `Mode::Record` deduplicating-snapshot cache.
-//
-// SPECIFICATION.md §8.3 and §20.1 require that, in `Mode::Record`, a request
-// already present in the snapshot is *replayed* and **not re-recorded** — "the
-// snapshot acts as a deduplicating cache so already-seen requests do not re-hit
-// the upstream", and a re-run "replays any request already in the file rather
-// than re-recording it". The lifecycle previously recorded every served
-// exchange unconditionally, so a replay hit appended a duplicate on every hit.
-// ---------------------------------------------------------------------------
-
-/// Number of non-blank NDJSON lines currently on disk at `path`.
-async fn ndjson_line_count(path: &std::path::Path) -> usize {
-    let raw = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    raw.lines().filter(|l| !l.trim().is_empty()).count()
-}
-
-/// Write a single recorded exchange into a fresh NDJSON file at `path`.
-async fn seed_snapshot(
-    path: &std::path::Path,
-    method: Method,
-    uri: &str,
-    req_body: &[u8],
-    resp_body: &[u8],
-) {
-    let req = RecordedRequest::from_parts(
-        &method,
-        &uri.parse().unwrap(),
-        &HeaderMap::new(),
-        Bytes::copy_from_slice(req_body),
-    );
-    let resp = RecordedResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: Bytes::copy_from_slice(resp_body),
-    };
-    let storage = JsonlStorage::open(path).await.unwrap();
-    storage
-        .append(&RecordedExchange::new(
-            Some("upstream".to_owned()),
-            req,
-            ExchangeOutcome::Response(resp),
-            Duration::from_millis(1),
-        ))
-        .await
-        .unwrap();
-    storage.flush().await.unwrap();
-    drop(storage);
-}
-
-/// An address that nothing is listening on — any forward to it fails, which
-/// lets a test prove a response came from the replay snapshot (not the
-/// upstream).
-async fn unreachable_addr() -> SocketAddr {
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let a = l.local_addr().unwrap();
-    drop(l);
-    a
-}
-
-/// Bug: "It multiplies records for existing requests."
-///
 /// A request already present in the snapshot file is served from the snapshot
 /// (proved here by pointing the upstream at an unreachable address: a forward
 /// would 502), but the recorder appended it a second time, so the file grew
-/// from one line to two. Per §8.3/§20.1 it must stay at one line.
+/// from one line to two. Per SPECIFICATION.md §8.3/§20.1 the snapshot is a
+/// deduplicating cache, so it must stay at one line.
 #[tokio::test]
 async fn record_mode_does_not_re_record_request_already_in_snapshot() {
     let dir = tempfile::tempdir().unwrap();
